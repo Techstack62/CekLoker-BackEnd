@@ -23,6 +23,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.models.base import Base
 # Import all models here so Alembic can discover them
 from app.models.user import User
+from app.models.loker_check import LokerCheck
 
 target_metadata = Base.metadata
 
