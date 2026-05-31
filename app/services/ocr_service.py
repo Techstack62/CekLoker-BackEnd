@@ -1,5 +1,6 @@
 import re
 import io
+import numpy as np
 import easyocr
 from PIL import Image
 
@@ -15,10 +16,15 @@ def get_reader() -> easyocr.Reader:
 
 
 def extract_text_from_image(image_bytes: bytes) -> str:
-    """Run OCR on raw image bytes and return a single concatenated text string."""
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    """Run OCR on raw image bytes and return a single concatenated text string.
+
+    EasyOCR supports: str (path/url), bytes, or numpy array.
+    We convert via PIL → numpy array for full format compatibility.
+    """
+    pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    np_image = np.array(pil_image)          # shape: (H, W, 3), dtype: uint8
     reader = get_reader()
-    results = reader.readtext(image, detail=0, paragraph=True)
+    results = reader.readtext(np_image, detail=0, paragraph=True)
     return "\n".join(results)
 
 

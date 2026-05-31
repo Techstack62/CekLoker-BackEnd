@@ -1,5 +1,6 @@
 import uuid
 import asyncio
+import aiofiles
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -18,6 +19,10 @@ ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/jpg", "image/png"}
 MAX_FILE_SIZE_MB = 10
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
+# Folder tempat gambar pamflet disimpan (relatif terhadap root project)
+UPLOAD_DIR = Path("uploads/loker")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
 
 @router.post(
     "/check",
@@ -33,29 +38,42 @@ async def check_loker(
     """
     Upload gambar pamflet loker untuk dianalisis.
 
+    - Validasi tipe & ukuran file.
+    - Simpan gambar ke folder `uploads/loker/`.
     - Melakukan OCR untuk mengekstrak informasi lowongan.
     - Menganalisis potensi scam dari data yang diekstrak.
     - Menyimpan dan mengembalikan hasil analisis.
     """
-    # --- Validasi file ---
+    # --- Validasi tipe file ---
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Format file tidak didukung. Gunakan PNG atau JPG.",
+            detail="Format file tidak didukung. Gunakan PNG atau JPG.",
         )
 
     image_bytes = await file.read()
 
+    # --- Validasi ukuran file ---
     if len(image_bytes) > MAX_FILE_SIZE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"Ukuran file melebihi batas {MAX_FILE_SIZE_MB} MB.",
         )
 
+    # --- Simpan gambar ke disk ---
+    ext = Path(file.filename).suffix.lower() if file.filename else ".jpg"
+    image_filename = f"{uuid.uuid4().hex}{ext}"
+    save_path = UPLOAD_DIR / image_filename
+
+    async with aiofiles.open(save_path, "wb") as out_file:
+        await out_file.write(image_bytes)
+
     # --- OCR (dijalankan di thread pool agar tidak memblokir event loop) ---
     try:
         raw_text = await asyncio.to_thread(ocr_service.extract_text_from_image, image_bytes)
     except Exception as exc:
+        # Hapus file yang sudah tersimpan jika OCR gagal
+        save_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Gagal memproses gambar. Pastikan gambar jelas dan tidak rusak. Detail: {exc}",
@@ -66,12 +84,10 @@ async def check_loker(
     # --- Scam Analysis (mock) ---
     analysis = await asyncio.to_thread(scam_analysis_service.analyze_scam, parsed)
 
-    # --- Simpan ke database ---
-    image_filename = f"{uuid.uuid4().hex}_{file.filename}"
-
+    # --- Simpan hasil ke database ---
     loker_check = LokerCheck(
         user_id=current_user.id,
-        image_filename=image_filename,
+        image_filename=image_filename,   # hanya nama file, bukan full path
         **parsed,
         scam_percentage=analysis.scam_percentage,
         scam_category=analysis.scam_category,

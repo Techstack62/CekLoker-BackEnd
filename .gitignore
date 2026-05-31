@@ -20,3 +20,7 @@ htmlcov/
 # OS files
 .DS_Store
 Thumbs.db
+
+# User uploads (gambar pamflet loker)
+uploads/loker/*
+!uploads/loker/.gitkeep
