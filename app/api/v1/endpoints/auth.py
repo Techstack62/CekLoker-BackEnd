@@ -15,7 +15,8 @@ router = APIRouter()
 
 @router.post("/register", response_model=UserResponse)
 async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
-    stmt = select(User).where(User.email == user_in.email)
+    email = user_in.email.lower()
+    stmt = select(User).where(User.email == email)
     result = await db.execute(stmt)
     if result.scalar_one_or_none():
         raise HTTPException(
@@ -24,7 +25,7 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
         )
     
     new_user = User(
-        email=user_in.email,
+        email=email,
         hashed_password=get_password_hash(user_in.password),
         full_name=user_in.full_name,
         is_active=True
@@ -39,7 +40,8 @@ async def login(
     db: AsyncSession = Depends(get_db),
     form_data: OAuth2PasswordRequestForm = Depends()
 ):
-    stmt = select(User).where(User.email == form_data.username)
+    email = form_data.username.lower()
+    stmt = select(User).where(User.email == email)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     

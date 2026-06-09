@@ -30,10 +30,11 @@ async def get_current_user(
         token_data = TokenPayload(**payload)
         if token_data.sub is None:
             raise credentials_exception
-    except JWTError:
+        user_id = int(token_data.sub)
+    except (JWTError, TypeError, ValueError):
         raise credentials_exception
 
-    stmt = select(User).where(User.id == int(token_data.sub))
+    stmt = select(User).where(User.id == user_id)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     

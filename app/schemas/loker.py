@@ -23,6 +23,7 @@ class LokerCheckResponse(BaseModel):
     scam_reason: str | None = None
 
     image_filename: str | None = None
+    image_url: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -35,6 +36,7 @@ class LokerCheckSummary(BaseModel):
     company_name: str | None = None
     scam_percentage: float | None = None
     scam_category: str | None = None
+    image_url: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -36,3 +36,10 @@ class LokerCheck(Base):
 
     # Relationships
     user = relationship("User", back_populates="loker_checks")
+
+    @property
+    def image_url(self) -> str | None:
+        """Relative API URL to access this check's uploaded image."""
+        if not self.image_filename:
+            return None
+        return f"/api/v1/jobs/history/{self.id}/image"

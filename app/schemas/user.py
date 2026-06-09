@@ -1,5 +1,5 @@
 from typing import Optional
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 # Shared properties
 class UserBase(BaseModel):
@@ -9,11 +9,10 @@ class UserBase(BaseModel):
 
 # Properties to receive via API on creation
 class UserCreate(UserBase):
-    password: str
+    password: str = Field(..., min_length=8)
 
 # Properties to return via API
 class UserResponse(UserBase):
     id: int
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}

@@ -117,9 +117,13 @@ cp .env.example .env
 Isi variabel berikut di `.env`:
 ```env
 DATABASE_URL=postgresql+asyncpg://<USER>:<PASSWORD>@localhost:5432/<DB_NAME>
-SECRET_KEY=<random-secret-key-yang-panjang>
+SECRET_KEY=<random-secret-key-minimal-32-karakter>
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
+DB_ECHO=false
+BACKEND_CORS_ORIGINS=["http://localhost:3000","http://localhost:5173"]
 ```
+
+> `SECRET_KEY` wajib minimal 32 karakter. `DB_ECHO=true` hanya disarankan saat debugging lokal karena akan menampilkan query SQL ke log.
 
 ### 4. Setup Database & Migrasi
 ```bash
@@ -159,6 +163,7 @@ Setelah server berjalan, akses dokumentasi interaktif di:
 | `POST` | `/check` | Upload gambar pamflet → OCR → analisis scam | ✅ |
 | `GET` | `/history` | Riwayat cek loker milik user (paginated) | ✅ |
 | `GET` | `/history/{check_id}` | Detail satu riwayat pengecekan | ✅ |
+| `GET` | `/history/{check_id}/image` | Ambil gambar pamflet dari riwayat milik user | ✅ |
 
 > Endpoint bertanda ✅ memerlukan header `Authorization: Bearer <token>`.
 
@@ -170,4 +175,13 @@ Setelah server berjalan, akses dokumentasi interaktif di:
 Analisis scam saat ini menggunakan **mock implementation** berbasis keyword matching. Modul ini dirancang secara modular di [`app/services/scam_analysis_service.py`](app/services/scam_analysis_service.py) — cukup ganti body fungsi `analyze_scam()` ketika model AI yang sesungguhnya sudah siap, tanpa perlu mengubah kode lain.
 
 ### Penyimpanan Gambar
-Gambar yang diupload disimpan secara lokal di folder `uploads/loker/` dengan nama file UUID. Folder ini tidak ter-push ke GitHub (`.gitignore`). Untuk production, disarankan menggunakan object storage seperti AWS S3, Google Cloud Storage, atau Supabase Storage.
+Gambar yang diupload disimpan secara lokal di folder `uploads/loker/` dengan nama file UUID. File upload asli tidak ter-push ke GitHub (`.gitignore`), tetapi folder tetap dipertahankan dengan `.gitkeep`.
+
+Untuk menampilkan gambar, gunakan endpoint aman:
+
+```http
+GET /api/v1/jobs/history/{check_id}/image
+Authorization: Bearer <token>
+```
+
+Endpoint tersebut memastikan hanya pemilik riwayat yang dapat mengakses gambar. Untuk production, disarankan menggunakan object storage seperti AWS S3, Google Cloud Storage, atau Supabase Storage.
