@@ -24,3 +24,7 @@ Thumbs.db
 # User uploads (gambar pamflet loker)
 uploads/loker/*
 !uploads/loker/.gitkeep
+
+# User profile images
+uploads/profile/*
+!uploads/profile/.gitkeep

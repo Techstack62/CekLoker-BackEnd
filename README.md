@@ -40,6 +40,13 @@ Proyek ini dibangun menggunakan arsitektur modular (Clean Architecture) dengan t
 - Lihat semua riwayat cek loker milik akun sendiri (paginated).
 - Lihat detail spesifik berdasarkan ID (hanya bisa diakses oleh pemiliknya).
 
+### 👤 Profile User
+- **Lihat Profile** — Lihat data profile user yang sedang login.
+- **Edit Profile** — Update nama lengkap.
+- **Upload Gambar Profile** — Upload atau ganti foto profile (PNG/JPG, maks 5 MB).
+- **Lihat Gambar Profile** — Ambil gambar profile user.
+- **Hapus Akun** — Hapus akun beserta semua data terkait (riwayat pengecekan loker). Tindakan ini **tidak dapat dibatalkan**.
+
 ---
 
 ## Struktur Project
@@ -52,7 +59,8 @@ app/
 │       ├── api.py               # Router utama API v1
 │       └── endpoints/
 │           ├── auth.py          # Endpoint autentikasi
-│           └── jobs.py          # Endpoint cek loker & riwayat
+│           ├── jobs.py          # Endpoint cek loker & riwayat
+│           └── profile.py       # Endpoint profile user
 ├── core/
 │   ├── config.py                # Konfigurasi environment variables
 │   ├── database.py              # Koneksi async database
@@ -71,7 +79,8 @@ app/
 └── main.py                      # Entry point FastAPI app
 
 uploads/
-└── loker/                       # Gambar pamflet yang diupload user (lokal, tidak di-push ke git)
+├── loker/                       # Gambar pamflet yang diupload user
+└── profile/                      # Gambar profile user
 
 alembic/                         # Migrasi database
 ```
@@ -165,23 +174,50 @@ Setelah server berjalan, akses dokumentasi interaktif di:
 | `GET` | `/history/{check_id}` | Detail satu riwayat pengecekan | ✅ |
 | `GET` | `/history/{check_id}/image` | Ambil gambar pamflet dari riwayat milik user | ✅ |
 
+### Profile (`/api/v1/profile`)
+
+| Method | Endpoint | Deskripsi | Auth |
+|---|---|---|---|
+| `GET` | `/profile` | Lihat data profile user | ✅ |
+| `PUT` | `/profile` | Edit nama lengkap | ✅ |
+| `POST` | `/profile/image` | Upload atau ganti gambar profile | ✅ |
+| `GET` | `/profile/image` | Lihat gambar profile | ✅ |
+| `DELETE` | `/profile` | Hapus akun dan semua data terkait | ✅ |
+
 > Endpoint bertanda ✅ memerlukan header `Authorization: Bearer <token>`.
 
 ---
 
 ## Catatan Pengembangan
 
+### Keamanan
+
+- **Validasi File Upload**: Semua file upload divalidasi berdasarkan tipe konten dan ekstensi. File yang bukan gambar valid akan ditolak.
+- **Proteksi Endpoint**: Semua endpoint profile memerlukan autentikasi JWT. User hanya bisa mengakses dan memodifikasi data miliknya sendiri.
+- **Cleanup Otomatis**: Gambar profile lama secara otomatis dihapus saat user mengupload gambar baru.
+- **Cascade Delete**: Saat akun dihapus, semua data terkait (riwayat pengecekan loker) juga ikut dihapus.
+
 ### Mock AI Model
 Analisis scam saat ini menggunakan **mock implementation** berbasis keyword matching. Modul ini dirancang secara modular di [`app/services/scam_analysis_service.py`](app/services/scam_analysis_service.py) — cukup ganti body fungsi `analyze_scam()` ketika model AI yang sesungguhnya sudah siap, tanpa perlu mengubah kode lain.
 
 ### Penyimpanan Gambar
-Gambar yang diupload disimpan secara lokal di folder `uploads/loker/` dengan nama file UUID. File upload asli tidak ter-push ke GitHub (`.gitignore`), tetapi folder tetap dipertahankan dengan `.gitkeep`.
+Gambar yang diupload disimpan secara lokal di folder `uploads/` dengan nama file UUID:
 
-Untuk menampilkan gambar, gunakan endpoint aman:
+- **Gambar Pamflet Loker**: `uploads/loker/`
+- **Gambar Profile**: `uploads/profile/`
+
+File upload asli tidak ter-push ke GitHub (`.gitignore`), tetapi folder tetap dipertahankan dengan `.gitkeep`.
+
+Untuk menampilkan gambar, gunakan endpoint aman yang telah disediakan:
 
 ```http
+# Gambar Pamflet Loker
 GET /api/v1/jobs/history/{check_id}/image
+Authorization: Bearer <token>
+
+# Gambar Profile
+GET /api/v1/profile/image
 Authorization: Bearer <token>
 ```
 
-Endpoint tersebut memastikan hanya pemilik riwayat yang dapat mengakses gambar. Untuk production, disarankan menggunakan object storage seperti AWS S3, Google Cloud Storage, atau Supabase Storage.
+Endpoint tersebut memastikan hanya pemilik yang dapat mengakses gambar. Untuk production, disarankan menggunakan object storage seperti AWS S3, Google Cloud Storage, atau Supabase Storage.
