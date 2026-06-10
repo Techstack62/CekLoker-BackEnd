@@ -73,6 +73,8 @@ class LokerCheckResponse(BaseModel):
     image_url: Optional[str] = None
     is_draft: bool
     submitted_at: Optional[datetime] = None
+    is_shared: bool = False
+    shared_at: Optional[datetime] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -86,6 +88,7 @@ class LokerCheckSummary(BaseModel):
     scam_percentage: Optional[float] = None
     scam_category: Optional[str] = None
     is_draft: bool
+    is_shared: bool = False
     image_url: Optional[str] = None
     created_at: datetime
 
@@ -98,3 +101,53 @@ class HistoryListResponse(BaseModel):
     page: int
     size: int
     results: list[LokerCheckSummary]
+
+
+# Community sharing schemas
+class ShareToCommunityRequest(BaseModel):
+    """Request to share a check result to community."""
+    anonymous: bool = Field(
+        default=False,
+        description="Whether to share as anonymous or with user name"
+    )
+
+
+class ShareResponse(BaseModel):
+    """Response after share/unshare action."""
+    message: str
+    is_shared: bool
+    shared_at: Optional[datetime] = None
+
+
+class CommunityReportResponse(BaseModel):
+    """Public community report response (with privacy controls)."""
+    id: int
+    loker_check_id: int
+    job_title: Optional[str] = None
+    company_name: Optional[str] = None
+    info_source: Optional[str] = None
+    job_type: Optional[str] = None
+    salary: Optional[str] = None
+    description: Optional[str] = None
+    # Masked sensitive data for privacy
+    company_email: Optional[str] = None  # Will be masked
+    phone_number: Optional[str] = None  # Will be masked
+    # Analysis results
+    scam_percentage: float
+    scam_category: str
+    scam_reason: Optional[str] = None
+    # Sharer info
+    shared_by: Optional[str] = None  # full_name or None if anonymous
+    shared_anonymous: bool
+    shared_at: datetime
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CommunityFeedResponse(BaseModel):
+    """Paginated community feed response."""
+    total: int
+    page: int
+    size: int
+    results: list[CommunityReportResponse]

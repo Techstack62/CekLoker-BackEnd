@@ -49,6 +49,13 @@ Fitur cek loker menggunakan alur **dua tahap** yang memberikan kontrol penuh kep
 - Lihat semua riwayat cek loker milik akun sendiri (paginated).
 - Lihat detail spesifik berdasarkan ID (hanya bisa diakses oleh pemiliknya).
 
+### 🌐 Community Sharing
+- **Share ke Community** — User bisa mempublish hasil cek loker ke community feed.
+- **Unshare** — User bisa menarik kembali hasil yang sudah dishare.
+- **Anonymous Option** — User bisa memilih untuk dishare secara anonymous atau dengan nama.
+- **Community Feed** — List semua hasil yang dishare (paginated, filterable).
+- **Privacy by Default** — Hasil cek loker tidak otomatis dishare.
+
 ### 👤 Profile User
 - **Lihat Profile** — Lihat data profile user yang sedang login.
 - **Edit Profile** — Update nama lengkap.
@@ -69,7 +76,8 @@ app/
 │       └── endpoints/
 │           ├── auth.py          # Endpoint autentikasi
 │           ├── jobs.py          # Endpoint cek loker & riwayat (two-stage)
-│           └── profile.py       # Endpoint profile user
+│           ├── profile.py       # Endpoint profile user
+│           └── community.py     # Endpoint community feed
 ├── core/
 │   ├── config.py                # Konfigurasi environment variables
 │   ├── database.py              # Koneksi async database
@@ -187,7 +195,7 @@ Setelah server berjalan, akses dokumentasi interaktif di:
 | `POST` | `/drafts/{draft_id}/submit` | Submit draft untuk analisis scam | ✅ |
 | `DELETE` | `/drafts/{draft_id}` | Hapus draft | ✅ |
 
-#### History Endpoints
+#### History & Sharing Endpoints
 
 | Method | Endpoint | Deskripsi | Auth |
 |---|---|---|---|
@@ -195,6 +203,27 @@ Setelah server berjalan, akses dokumentasi interaktif di:
 | `GET` | `/history` | Riwayat cek loker yang sudah di-submit (paginated) | ✅ |
 | `GET` | `/history/{check_id}` | Detail satu riwayat pengecekan | ✅ |
 | `GET` | `/history/{check_id}/image` | Ambil gambar pamflet dari riwayat | ✅ |
+| `POST` | `/history/{check_id}/share` | Share hasil ke community | ✅ |
+| `DELETE` | `/history/{check_id}/share` | Unshare dari community | ✅ |
+
+### Community (`/api/v1/community`)
+
+| Method | Endpoint | Deskripsi | Auth |
+|---|---|---|---|
+| `GET` | `/` | Community feed (paginated, filterable) | ❌ |
+| `GET` | `/{report_id}` | Detail satu report di community | ❌ |
+
+#### Community Feed Filters
+
+| Parameter | Tipe | Deskripsi |
+|---|---|---|
+| `page` | int | Nomor halaman (default 1) |
+| `size` | int | Jumlah item per halaman (default 10, max 100) |
+| `company` | string | Filter by company name (partial match) |
+| `scam_category` | string | Filter by scam category |
+| `min_scam` | float | Filter minimum scam percentage |
+| `max_scam` | float | Filter maximum scam percentage |
+| `search` | string | Search across job_title and company_name |
 
 ### Profile (`/api/v1/profile`)
 
@@ -242,6 +271,24 @@ Setelah server berjalan, akses dokumentasi interaktif di:
 
 ---
 
+## Community Sharing Flow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                 COMMUNITY SHARING FLOW                       │
+├─────────────────────────────────────────────────────────────┤
+│  1. User selesaikan cek loker (submit draft)                 │
+│  2. User bisa pilih untuk share ke community                  │
+│  3a. Jika anonymous → nama user tidak ditampilkan            │
+│  3b. Jika tidak anonymous → nama user ditampilkan           │
+│  4. Hasil dishare ke community feed                           │
+│  5. Orang lain bisa melihat, search, dan filter              │
+│  6. User bisa unshare kapan saja                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Catatan Pengembangan
 
 ### Keamanan
@@ -253,9 +300,18 @@ Setelah server berjalan, akses dokumentasi interaktif di:
 - **Rate Limiting**: 10 upload per menit per IP pada endpoint upload
 - **Proteksi Endpoint**: Semua endpoint memerlukan autentikasi JWT
 - **Authorization**: User hanya bisa mengakses dan memodifikasi data miliknya sendiri
+- **Privacy di Community**: Data sensitif (email, phone) di-mask di community feed
 - **Cleanup Otomatis**: Gambar lama secara otomatis dihapus saat upload baru
 - **Cascade Delete**: Saat akun dihapus, semua data terkait ikut dihapus
 - **Logging**: Security events di-log untuk monitoring
+
+### Privacy di Community Feed
+
+Data yang dishare ke community sudah di-mask untuk melindungi privasi:
+- **Email**: `us***@domain.com` (hanya 2 karakter pertama visible)
+- **Phone**: `***1234` (hanya 4 karakter terakhir visible)
+
+User bisa memilih untuk share secara anonymous atau dengan nama.
 
 ### Mock AI Model
 Analisis scam saat ini menggunakan **mock implementation** berbasis keyword matching. Modul ini dirancang secara modular di [`app/services/scam_analysis_service.py`](app/services/scam_analysis_service.py) — cukup ganti body fungsi `analyze_scam()` ketika model AI yang sesungguhnya sudah siap, tanpa perlu mengubah kode lain.
@@ -288,3 +344,10 @@ Endpoint tersebut memastikan hanya pemilik yang dapat mengakses gambar. Untuk pr
 2. **Kontrol Penuh**: User punya waktu untuk review sebelum submit
 3. **Fleksibel**: User bisa simpan banyak draft sebelum memutuskan
 4. **Tidak Ada Pressure**: Tidak ada batasan waktu untuk submit
+
+### Community Sharing Benefits
+
+1. **Sharing Knowledge**: User bisa berbagi temuan loker mencurigakan
+2. **Social Proof**: Orang lain bisa melihat apakah suatu lowongan sudah di-check
+3. **Community Awareness**: Membangun database knowledge tentang loker mencurigakan
+4. **Privacy Control**: User punya kontrol penuh (anonymous option, unshare kapan saja)

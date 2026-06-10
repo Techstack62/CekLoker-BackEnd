@@ -24,7 +24,7 @@ class LokerCheck(Base):
     salary = Column(String, nullable=True)
     raw_ocr_text = Column(Text, nullable=True)
 
-    # New: Structured OCR data in JSON format
+    # Structured OCR data in JSON format
     ocr_data = Column(JSON, nullable=True)
 
     # Scam analysis result
@@ -39,6 +39,11 @@ class LokerCheck(Base):
     is_draft = Column(Boolean, default=True, nullable=False, index=True)
     submitted_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Community sharing fields
+    is_shared = Column(Boolean, default=False, nullable=False, index=True)
+    shared_at = Column(DateTime(timezone=True), nullable=True)
+    share_anonymous = Column(Boolean, default=False, nullable=False)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
@@ -50,3 +55,25 @@ class LokerCheck(Base):
         if not self.image_filename:
             return None
         return f"/api/v1/jobs/history/{self.id}/image"
+
+    @property
+    def masked_email(self) -> str | None:
+        """Return masked email for community display."""
+        if not self.company_email:
+            return None
+        parts = self.company_email.split("@")
+        if len(parts) != 2:
+            return None
+        username = parts[0]
+        domain = parts[1]
+        masked_username = username[:2] + "***" if len(username) > 2 else "***"
+        return f"{masked_username}@{domain}"
+
+    @property
+    def masked_phone(self) -> str | None:
+        """Return masked phone number for community display."""
+        if not self.phone_number:
+            return None
+        if len(self.phone_number) <= 4:
+            return "***" + self.phone_number
+        return "***" + self.phone_number[-4:]

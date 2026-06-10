@@ -4,6 +4,7 @@ import aiofiles
 import io
 import logging
 from pathlib import Path
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, Request, status
 from fastapi.responses import FileResponse
@@ -12,6 +13,7 @@ from slowapi.util import get_remote_address
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, get_db
 from app.models.loker_check import LokerCheck
@@ -24,6 +26,8 @@ from app.schemas.loker import (
     LokerCheckSummary,
     HistoryListResponse,
     DraftListResponse,
+    ShareToCommunityRequest,
+    ShareResponse,
 )
 from app.services import ocr_service, scam_analysis_service
 
@@ -723,3 +727,132 @@ async def get_history_image(
         )
 
     return FileResponse(path=image_path)
+
+
+# ============ Community Sharing Endpoints ============
+
+@router.post(
+    "/history/{check_id}/share",
+    response_model=ShareResponse,
+    summary="Share Hasil ke Community",
+    tags=["jobs"],
+)
+async def share_to_community(
+    check_id: int,
+    share_request: ShareToCommunityRequest = ShareToCommunityRequest(),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Share hasil pengecekan loker ke community.
+    
+    - Validasi hasil exists & milik user
+    - Validasi sudah di-submit (bukan draft)
+    - Validasi belum dishare
+    - Update is_shared=True, shared_at=now()
+    - Return hasil share
+    """
+    result = await db.execute(
+        select(LokerCheck).where(LokerCheck.id == check_id)
+    )
+    check = result.scalar_one_or_none()
+
+    if check is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Hasil pengecekan tidak ditemukan.",
+        )
+
+    if check.user_id != current_user.id:
+        logger.warning(f"Unauthorized share attempt: user {current_user.id} tried to share check_id {check_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Anda tidak memiliki akses ke hasil ini.",
+        )
+
+    if check.is_draft:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Hasil harus di-submit terlebih dahulu sebelum dishare.",
+        )
+
+    if check.is_shared:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Hasil sudah dishare ke community.",
+        )
+
+    # Update sharing status
+    check.is_shared = True
+    check.shared_at = datetime.utcnow()
+    check.share_anonymous = share_request.anonymous
+
+    await db.commit()
+    await db.refresh(check)
+
+    logger.info(f"Check shared to community: id={check_id}, user={current_user.id}, anonymous={share_request.anonymous}")
+
+    return ShareResponse(
+        message="Berhasil dishare ke community." if not share_request.anonymous else "Berhasil dishare ke community secara anonymous.",
+        is_shared=True,
+        shared_at=check.shared_at,
+    )
+
+
+@router.delete(
+    "/history/{check_id}/share",
+    response_model=ShareResponse,
+    summary="Unshare dari Community",
+    tags=["jobs"],
+)
+async def unshare_from_community(
+    check_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Tarik kembali hasil pengecekan dari community.
+    
+    - Validasi hasil exists & milik user
+    - Validasi sudah dishare
+    - Update is_shared=False, shared_at=None
+    - Return hasil unshare
+    """
+    result = await db.execute(
+        select(LokerCheck).where(LokerCheck.id == check_id)
+    )
+    check = result.scalar_one_or_none()
+
+    if check is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Hasil pengecekan tidak ditemukan.",
+        )
+
+    if check.user_id != current_user.id:
+        logger.warning(f"Unauthorized unshare attempt: user {current_user.id} tried to unshare check_id {check_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Anda tidak memiliki akses ke hasil ini.",
+        )
+
+    if not check.is_shared:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Hasil belum dishare ke community.",
+        )
+
+    # Update sharing status
+    check.is_shared = False
+    check.shared_at = None
+    check.share_anonymous = False
+
+    await db.commit()
+
+    logger.info(f"Check unshared from community: id={check_id}, user={current_user.id}")
+
+    return ShareResponse(
+        message="Berhasil dihapus dari community.",
+        is_shared=False,
+        shared_at=None,
+    )
