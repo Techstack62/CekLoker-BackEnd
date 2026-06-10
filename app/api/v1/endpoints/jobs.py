@@ -45,6 +45,11 @@ from app.core.exceptions import (
     DraftAlreadySubmittedException,
     InternalServerException,
 )
+from app.api.v1.responses import (
+    responses_file_upload,
+    responses_401_403_404_500,
+    responses_share,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -123,12 +128,121 @@ async def read_file_with_size_limit(file: UploadFile, max_size: int) -> bytes:
     return b"".join(chunks)
 
 
+# ========== Standard HTTP Error Response Definitions ==========
+_AUTH_RESPONSES = {
+    **responses_file_upload(),
+    422: {
+        "description": "Unprocessable Entity - Validation error (Pydantic validation failed)",
+        "content": {
+            "application/json": {
+                "example": {
+                    "error": "VALIDATION_ERROR",
+                    "message": "Validasi data gagal.",
+                    "details": {"field_errors": [{"field": "file", "message": "field required"}]},
+                    "timestamp": "2026-06-10T12:00:00Z"
+                }
+            }
+        }
+    },
+}
+
+_DRAFT_LIST_RESPONSES = {
+    **responses_401_403_404_500(),
+    422: {
+        "description": "Unprocessable Entity - Validation error",
+        "content": {
+            "application/json": {
+                "example": {
+                    "error": "VALIDATION_ERROR",
+                    "message": "Validasi data gagal.",
+                    "details": {"field_errors": [{"field": "page", "message": "field required"}]},
+                    "timestamp": "2026-06-10T12:00:00Z"
+                }
+            }
+        }
+    },
+}
+
+_DRAFT_DETAIL_RESPONSES = {
+    **responses_401_403_404_500(),
+    400: {
+        "description": "Bad Request - Draft already submitted",
+        "content": {
+            "application/json": {
+                "example": {
+                    "error": "BAD_REQUEST",
+                    "message": "Draft sudah di-submit. Gunakan endpoint history.",
+                    "details": {"field": None},
+                    "timestamp": "2026-06-10T12:00:00Z"
+                }
+            }
+        }
+    },
+}
+
+_DRAFT_UPDATE_RESPONSES = {
+    **responses_401_403_404_500(),
+    409: {
+        "description": "Conflict - Draft already submitted",
+        "content": {
+            "application/json": {
+                "example": {
+                    "error": "DRAFT_ALREADY_SUBMITTED",
+                    "message": "Draft sudah di-submit dan tidak bisa diedit.",
+                    "details": None,
+                    "timestamp": "2026-06-10T12:00:00Z"
+                }
+            }
+        }
+    },
+}
+
+_DRAFT_DELETE_RESPONSES = {
+    **responses_401_403_404_500(),
+    409: {
+        "description": "Conflict - Draft already submitted",
+        "content": {
+            "application/json": {
+                "example": {
+                    "error": "DRAFT_ALREADY_SUBMITTED",
+                    "message": "Draft sudah di-submit dan tidak bisa dihapus.",
+                    "details": None,
+                    "timestamp": "2026-06-10T12:00:00Z"
+                }
+            }
+        }
+    },
+}
+
+_SHARE_RESPONSES = {
+    **responses_share(),
+    422: {
+        "description": "Unprocessable Entity - Validation error",
+        "content": {
+            "application/json": {
+                "example": {
+                    "error": "VALIDATION_ERROR",
+                    "message": "Validasi data gagal.",
+                    "details": {"field_errors": []},
+                    "timestamp": "2026-06-10T12:00:00Z"
+                }
+            }
+        }
+    },
+}
+
+_HISTORY_RESPONSES = {
+    **responses_401_403_404_500(),
+}
+
+
 @router.post(
     "/ocr",
     response_model=OCRResultResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Upload Gambar → OCR → Preview Hasil untuk Review",
     tags=["jobs"],
+    responses=_AUTH_RESPONSES,
 )
 @limiter.limit("10/minute")
 async def upload_for_ocr(
@@ -198,6 +312,7 @@ async def upload_for_ocr(
     response_model=DraftListResponse,
     summary="List Semua Draft User",
     tags=["jobs"],
+    responses=_DRAFT_LIST_RESPONSES,
 )
 async def get_drafts(
     page: int = Query(default=1, ge=1, description="Nomor halaman"),
@@ -251,6 +366,7 @@ async def get_drafts(
     response_model=OCRResultResponse,
     summary="Detail Satu Draft",
     tags=["jobs"],
+    responses=_DRAFT_DETAIL_RESPONSES,
 )
 async def get_draft_detail(
     draft_id: int,
@@ -288,6 +404,22 @@ async def get_draft_detail(
     response_model=OCRResultResponse,
     summary="Update/Edit Hasil OCR Draft",
     tags=["jobs"],
+    responses={
+        **_DRAFT_UPDATE_RESPONSES,
+        422: {
+            "description": "Unprocessable Entity - Validation error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "VALIDATION_ERROR",
+                        "message": "Validasi data gagal.",
+                        "details": {"field_errors": [{"field": "ocr_data.job_title", "message": "field required"}]},
+                        "timestamp": "2026-06-10T12:00:00Z"
+                    }
+                }
+            }
+        },
+    },
 )
 async def update_draft(
     draft_id: int,
@@ -357,6 +489,7 @@ async def update_draft(
     response_model=LokerCheckResponse,
     summary="Submit Draft untuk Analisis Scam",
     tags=["jobs"],
+    responses=_HISTORY_RESPONSES,
 )
 async def submit_draft(
     draft_id: int,
@@ -409,6 +542,7 @@ async def submit_draft(
     "/drafts/{draft_id}",
     summary="Hapus Draft",
     tags=["jobs"],
+    responses=_DRAFT_DELETE_RESPONSES,
 )
 async def delete_draft(
     draft_id: int,
@@ -451,6 +585,7 @@ async def delete_draft(
     summary="[Deprecated] Cek Loker dari Gambar Pamflet - Gunakan /ocr",
     tags=["jobs"],
     deprecated=True,
+    responses=_AUTH_RESPONSES,
 )
 @limiter.limit("10/minute")
 async def check_loker_legacy(
@@ -488,6 +623,7 @@ async def check_loker_legacy(
     response_model=HistoryListResponse,
     summary="Riwayat Pengecekan Loker Saya (Yang Sudah Di-submit)",
     tags=["jobs"],
+    responses=_DRAFT_LIST_RESPONSES,
 )
 async def get_history(
     page: int = Query(default=1, ge=1, description="Nomor halaman"),
@@ -531,6 +667,7 @@ async def get_history(
     response_model=LokerCheckResponse,
     summary="Detail Riwayat Pengecekan Loker",
     tags=["jobs"],
+    responses=_HISTORY_RESPONSES,
 )
 async def get_history_detail(
     check_id: int,
@@ -558,6 +695,7 @@ async def get_history_detail(
     response_class=FileResponse,
     summary="Gambar Pamflet dari Riwayat Pengecekan",
     tags=["jobs"],
+    responses=_HISTORY_RESPONSES,
 )
 async def get_history_image(
     check_id: int,
@@ -595,6 +733,7 @@ async def get_history_image(
     response_model=ShareResponse,
     summary="Share Hasil ke Community",
     tags=["jobs"],
+    responses=_SHARE_RESPONSES,
 )
 async def share_to_community(
     check_id: int,
@@ -642,6 +781,22 @@ async def share_to_community(
     response_model=ShareResponse,
     summary="Unshare dari Community",
     tags=["jobs"],
+    responses={
+        **responses_share(),
+        400: {
+            "description": "Bad Request - Not shared",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "NOT_SHARED",
+                        "message": "Hasil belum dishare ke community.",
+                        "details": None,
+                        "timestamp": "2026-06-10T12:00:00Z"
+                    }
+                }
+            }
+        },
+    },
 )
 async def unshare_from_community(
     check_id: int,

@@ -13,6 +13,7 @@ from app.schemas.loker import (
     CommunityReportResponse,
     CommunityFeedResponse,
 )
+from app.api.v1.responses import responses_community
 
 # Configure logging
 logging.basicConfig(
@@ -52,6 +53,22 @@ def mask_sensitive_data(check: LokerCheck) -> dict:
     response_model=CommunityFeedResponse,
     summary="Community Feed - Semua Hasil yang Dishare",
     tags=["community"],
+    responses={
+        **responses_community(),
+        422: {
+            "description": "Unprocessable Entity - Validation error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "VALIDATION_ERROR",
+                        "message": "Validasi data gagal.",
+                        "details": {"field_errors": [{"field": "page", "message": "field required"}]},
+                        "timestamp": "2026-06-10T12:00:00Z"
+                    }
+                }
+            }
+        },
+    },
 )
 async def get_community_feed(
     page: int = Query(default=1, ge=1, description="Nomor halaman"),
@@ -138,6 +155,9 @@ async def get_community_feed(
     response_model=CommunityReportResponse,
     summary="Detail Report di Community",
     tags=["community"],
+    responses={
+        **responses_community(),
+    },
 )
 async def get_community_report_detail(
     report_id: int,

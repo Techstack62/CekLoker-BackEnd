@@ -20,6 +20,7 @@ from app.core.exceptions import (
     FileCorruptedException,
     InternalServerException,
 )
+from app.api.v1.responses import responses_profile
 
 # Configure logging
 logging.basicConfig(
@@ -111,7 +112,10 @@ def cleanup_old_image(image_filename: str) -> None:
     "/profile",
     response_model=ProfileResponse,
     summary="Lihat Profile User",
-    tags=["profile"]
+    tags=["profile"],
+    responses={
+        **responses_profile(),
+    },
 )
 async def get_profile(
     current_user: User = Depends(get_current_user),
@@ -125,7 +129,23 @@ async def get_profile(
     "/profile",
     response_model=ProfileResponse,
     summary="Edit Profile User",
-    tags=["profile"]
+    tags=["profile"],
+    responses={
+        **responses_profile(),
+        422: {
+            "description": "Unprocessable Entity - Validation error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "VALIDATION_ERROR",
+                        "message": "Validasi data gagal.",
+                        "details": {"field_errors": [{"field": "full_name", "message": "field required"}]},
+                        "timestamp": "2026-06-10T12:00:00Z"
+                    }
+                }
+            }
+        },
+    },
 )
 async def update_profile(
     user_update: UserUpdate,
@@ -147,7 +167,36 @@ async def update_profile(
     "/profile/image",
     response_model=ProfileResponse,
     summary="Upload atau Ganti Gambar Profile",
-    tags=["profile"]
+    tags=["profile"],
+    responses={
+        **responses_profile(),
+        413: {
+            "description": "Payload Too Large - File size exceeds limit",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "FILE_TOO_LARGE",
+                        "message": "Ukuran file melebihi batas 5 MB.",
+                        "details": {"max_size_mb": 5},
+                        "timestamp": "2026-06-10T12:00:00Z"
+                    }
+                }
+            }
+        },
+        415: {
+            "description": "Unsupported Media Type - Content-Type not supported",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "UNSUPPORTED_MEDIA_TYPE",
+                        "message": "Format file 'application/pdf' tidak didukung. Gunakan PNG atau JPG.",
+                        "details": {"content_type": "application/pdf"},
+                        "timestamp": "2026-06-10T12:00:00Z"
+                    }
+                }
+            }
+        },
+    },
 )
 async def upload_profile_image(
     file: UploadFile = File(..., description="Gambar profile (PNG/JPG, maks 5 MB)"),
@@ -187,7 +236,10 @@ async def upload_profile_image(
 @router.get(
     "/profile/image",
     summary="Lihat Gambar Profile",
-    tags=["profile"]
+    tags=["profile"],
+    responses={
+        **responses_profile(),
+    },
 )
 async def get_profile_image(
     current_user: User = Depends(get_current_user),
@@ -211,7 +263,10 @@ async def get_profile_image(
 @router.delete(
     "/profile",
     summary="Hapus Akun",
-    tags=["profile"]
+    tags=["profile"],
+    responses={
+        **responses_profile(),
+    },
 )
 async def delete_account(
     current_user: User = Depends(get_current_user),

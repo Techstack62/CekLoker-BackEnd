@@ -16,6 +16,10 @@ from app.models.user import User
 from app.schemas.user import UserCreate, UserLogin, UserResponse
 from app.schemas.token import Token
 from app.core.security import create_access_token
+from app.api.v1.responses import (
+    responses_401_409_500,
+    responses_401_500,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -45,6 +49,22 @@ def get_password_hash(password: str) -> str:
     status_code=status.HTTP_201_CREATED,
     summary="Daftar Akun Baru",
     tags=["auth"],
+    responses={
+        **responses_401_409_500(),
+        422: {
+            "description": "Unprocessable Entity - Validation error (Pydantic validation failed)",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "VALIDATION_ERROR",
+                        "message": "Validasi data gagal.",
+                        "details": {"field_errors": [{"field": "email", "message": "field required"}]},
+                        "timestamp": "2026-06-10T12:00:00Z"
+                    }
+                }
+            }
+        },
+    },
 )
 async def register(
     user_data: UserCreate,
@@ -97,6 +117,22 @@ async def register(
     response_model=Token,
     summary="Login dan Dapatkan JWT Token",
     tags=["auth"],
+    responses={
+        **responses_401_500(),
+        422: {
+            "description": "Unprocessable Entity - Validation error (Pydantic validation failed)",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "VALIDATION_ERROR",
+                        "message": "Validasi data gagal.",
+                        "details": {"field_errors": [{"field": "email", "message": "field required"}]},
+                        "timestamp": "2026-06-10T12:00:00Z"
+                    }
+                }
+            }
+        },
+    },
 )
 async def login(
     credentials: UserLogin,

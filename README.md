@@ -71,6 +71,7 @@ app/
 │   ├── deps.py                  # Dependency injection (auth, db session)
 │   └── v1/
 │       ├── api.py               # Router utama API v1
+│       ├── responses.py         # Helper function untuk dokumentasi status code
 │       └── endpoints/
 │           ├── auth.py          # Endpoint autentikasi
 │           ├── jobs.py          # Endpoint cek loker & riwayat (two-stage)
@@ -89,7 +90,8 @@ app/
 ├── schemas/
 │   ├── token.py                 # Schema JWT token
 │   ├── user.py                  # Schema request/response user
-│   └── loker.py                 # Schema request/response cek loker
+│   ├── loker.py                 # Schema request/response cek loker
+│   └── responses.py             # Schema untuk dokumentasi Swagger responses
 ├── services/
 │   ├── ocr_service.py           # OCR extraction & parsing
 │   └── scam_analysis_service.py # Scam analysis (mock AI — modular)
@@ -313,13 +315,30 @@ Setelah server berjalan, akses dokumentasi interaktif di:
 - **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
 - **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
 
+### Dokumentasi Status Code di Swagger
+
+Setiap endpoint memiliki **dokumentasi status code lengkap** di Swagger UI, mencakup:
+- 200/201 — Success response
+- 400 — Bad Request
+- 401 — Unauthorized
+- 403 — Forbidden
+- 404 — Not Found
+- 409 — Conflict
+- 413 — Payload Too Large
+- 415 — Unsupported Media Type
+- 422 — Validation Error
+- 429 — Rate Limit Exceeded
+- 500 — Internal Server Error
+
+Dokumentasi ini menggunakan centralized response schemas di [`app/schemas/responses.py`](app/schemas/responses.py) dan helper functions di [`app/api/v1/responses.py`](app/api/v1/responses.py) untuk konsistensi dan kemudahan maintenance.
+
 ---
 
 ## Catatan Pengembangan
 
 ### Keamanan
 
-- **Validasi File Upload**: 
+- **Validasi File Upload**:
   - Magic bytes validation (prevents file spoofing)
   - Chunked file reading dengan size limit (prevents DoS attacks)
   - Content-type validation
