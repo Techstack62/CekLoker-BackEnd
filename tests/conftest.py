@@ -1,6 +1,7 @@
 """Test configuration and shared fixtures for CekLoker Backend API."""
 import pytest
 import asyncio
+import os
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.pool import NullPool
@@ -13,9 +14,12 @@ from app.api.deps import get_db
 from app.models.base import Base
 from app.core.security import create_access_token
 
+# Import all models to ensure Base.metadata includes all tables
+from app.models.user import User
+from app.models.loker_check import LokerCheck
 
-# Test database configuration - uses in-memory SQLite for speed
-TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+# Test database configuration - uses file-based SQLite for tests
+TEST_DATABASE_URL = "sqlite+aiosqlite:///test.db"
 
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -45,10 +49,14 @@ def event_loop():
 @pytest.fixture(scope="function")
 async def test_engine():
     """Create async test database engine with schema creation/teardown."""
+    # Remove existing test database if it exists
+    if os.path.exists("test.db"):
+        os.remove("test.db")
+    
     engine = create_async_engine(
         TEST_DATABASE_URL,
         echo=False,
-        poolclass=NullPool,
+        connect_args={"check_same_thread": False},
     )
     
     async with engine.begin() as conn:
@@ -60,6 +68,10 @@ async def test_engine():
         await conn.run_sync(Base.metadata.drop_all)
     
     await engine.dispose()
+    
+    # Clean up test database
+    if os.path.exists("test.db"):
+        os.remove("test.db")
 
 
 @pytest.fixture(scope="function")
@@ -77,7 +89,6 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
 
 
 # ========== HTTP Client Fixtures ==========
-
 @pytest.fixture(scope="function")
 async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """Create async HTTP client for API testing with database override."""
@@ -100,13 +111,12 @@ async def authenticated_client(
     test_user
 ) -> AsyncGenerator[AsyncClient, None]:
     """Create authenticated HTTP client with Bearer token."""
-    token = create_access_token(data={"sub": str(test_user.id)})
+    token = create_access_token(subject=str(test_user.id))
     client.headers["Authorization"] = f"Bearer {token}"
     yield client
 
 
 # ========== Data Fixtures ==========
-
 @pytest.fixture
 def fake() -> Faker:
     """Create Faker instance for Indonesian locale test data generation."""
@@ -118,7 +128,6 @@ def test_user_data(fake: Faker) -> dict:
     """Generate random test user data."""
     return {
         "email": fake.unique.email(),
-        "username": fake.unique.user_name(),
         "password": "TestPassword123!",
         "full_name": fake.name(),
     }
@@ -129,7 +138,6 @@ def other_user_data(fake: Faker) -> dict:
     """Generate another random user data for authorization tests."""
     return {
         "email": fake.unique.email(),
-        "username": fake.unique.user_name(),
         "password": "OtherPassword123!",
         "full_name": fake.name(),
     }
@@ -138,12 +146,9 @@ def other_user_data(fake: Faker) -> dict:
 @pytest.fixture
 async def test_user(db_session: AsyncSession, test_user_data: dict):
     """Create test user in database with hashed password."""
-    from app.models.user import User
-    
     user = User(
         email=test_user_data["email"],
-        username=test_user_data["username"],
-        password_hash=get_password_hash(test_user_data["password"]),
+        hashed_password=get_password_hash(test_user_data["password"]),
         full_name=test_user_data["full_name"],
     )
     db_session.add(user)
@@ -155,12 +160,9 @@ async def test_user(db_session: AsyncSession, test_user_data: dict):
 @pytest.fixture
 async def other_user(db_session: AsyncSession, other_user_data: dict):
     """Create another test user for authorization tests."""
-    from app.models.user import User
-    
     user = User(
         email=other_user_data["email"],
-        username=other_user_data["username"],
-        password_hash=get_password_hash(other_user_data["password"]),
+        hashed_password=get_password_hash(other_user_data["password"]),
         full_name=other_user_data["full_name"],
     )
     db_session.add(user)
@@ -170,7 +172,6 @@ async def other_user(db_session: AsyncSession, other_user_data: dict):
 
 
 # ========== Test Data Fixtures ==========
-
 @pytest.fixture
 def test_image() -> bytes:
     """Generate test image bytes (800x600 JPEG)."""

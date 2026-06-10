@@ -35,7 +35,7 @@ class OCRReviewRequest(BaseModel):
 class OCRResultResponse(BaseModel):
     """Response after OCR extraction - returns for user review."""
     id: int
-    image_filename: str
+    image_filename: Optional[str] = None
     raw_text: str
     ocr_data: OCRData
     is_draft: bool

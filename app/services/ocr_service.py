@@ -1,16 +1,21 @@
 import re
 import io
 import numpy as np
-import easyocr
 from PIL import Image
 
-# Initialize reader once (lazy singleton) to avoid reloading model on every request
-_reader: easyocr.Reader | None = None
+# Lazy singleton for EasyOCR reader - only loaded when needed
+_reader = None
 
 
-def get_reader() -> easyocr.Reader:
+def get_reader():
+    """Get or create EasyOCR reader instance with lazy loading.
+
+    This avoids importing EasyOCR at module load time, which prevents
+    NumPy version incompatibility issues during testing.
+    """
     global _reader
     if _reader is None:
+        import easyocr
         _reader = easyocr.Reader(["id", "en"], gpu=False)
     return _reader
 

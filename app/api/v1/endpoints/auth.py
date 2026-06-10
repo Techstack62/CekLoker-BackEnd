@@ -54,7 +54,7 @@ async def register(
     Register new user account.
     
     Error handling:
-    - 409 Conflict: Email or username already registered
+    - 409 Conflict: Email already registered
     - 422 Validation Error: Invalid input data
     """
     # Check if email already exists
@@ -70,25 +70,11 @@ async def register(
             existing_resource=f"Email: {user_data.email}"
         )
     
-    # Check if username already exists
-    result = await db.execute(
-        select(User).where(User.username == user_data.username)
-    )
-    existing_username = result.scalar_one_or_none()
-    
-    if existing_username:
-        logger.warning(f"Registration failed: username '{user_data.username}' already registered")
-        raise ConflictException(
-            message="Username sudah digunakan. Silakan gunakan username lain.",
-            existing_resource=f"Username: {user_data.username}"
-        )
-    
     # Create new user
     hashed_password = get_password_hash(user_data.password)
     new_user = User(
         email=user_data.email,
-        username=user_data.username,
-        password_hash=hashed_password,
+        hashed_password=hashed_password,
         full_name=user_data.full_name,
     )
     
@@ -131,7 +117,7 @@ async def login(
     
     # Security: Use same error message for both email not found and wrong password
     # This prevents user enumeration attacks
-    if user is None or not verify_password(credentials.password, user.password_hash):
+    if user is None or not verify_password(credentials.password, user.hashed_password):
         logger.warning(f"Login failed for email: {credentials.email}")
         raise UnauthorizedException("Email atau password salah.")
     
@@ -142,7 +128,7 @@ async def login(
     
     # Create access token
     try:
-        access_token = create_access_token(data={"sub": str(user.id)})
+        access_token = create_access_token(subject=str(user.id))
         
         logger.info(f"User logged in successfully: {user.email}")
         

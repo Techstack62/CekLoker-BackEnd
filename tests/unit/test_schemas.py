@@ -16,12 +16,10 @@ class TestUserSchemas:
         """Test valid user creation schema."""
         data = UserCreate(
             email="test@example.com",
-            username="testuser",
             password="Password123!",
             full_name="Test User",
         )
         assert data.email == "test@example.com"
-        assert data.username == "testuser"
         assert data.password == "Password123!"
 
     def test_user_create_invalid_email(self):
@@ -29,7 +27,6 @@ class TestUserSchemas:
         with pytest.raises(ValidationError) as exc_info:
             UserCreate(
                 email="invalid-email",
-                username="testuser",
                 password="Password123!",
             )
         assert "email" in str(exc_info.value).lower()
@@ -39,7 +36,6 @@ class TestUserSchemas:
         with pytest.raises(ValidationError) as exc_info:
             UserCreate(
                 email="test@example.com",
-                username="testuser",
                 password="short",
             )
         assert "password" in str(exc_info.value).lower()

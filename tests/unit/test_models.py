@@ -12,8 +12,7 @@ class TestUserModel:
         """Test user can be created with valid data."""
         user = User(
             email=test_user_data["email"],
-            username=test_user_data["username"],
-            password_hash="$2b$12$hashedpassword",
+            hashed_password="$2b$12$hashedpassword",
             full_name=test_user_data["full_name"],
         )
         db_session.add(user)
@@ -22,12 +21,10 @@ class TestUserModel:
         
         assert user.id is not None
         assert user.email == test_user_data["email"]
-        assert user.username == test_user_data["username"]
 
     def test_user_default_values(self, test_user: User):
         """Test user has correct default values."""
         assert test_user.is_active is True
-        assert test_user.is_verified is False
         assert test_user.profile_image is None
 
     def test_user_email_property(self, test_user: User):

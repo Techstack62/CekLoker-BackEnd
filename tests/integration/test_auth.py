@@ -15,9 +15,8 @@ class TestAuthRegister:
         assert response.status_code == 201
         data = response.json()
         assert data["email"] == test_user_data["email"]
-        assert data["username"] == test_user_data["username"]
         assert "password" not in data
-        assert "password_hash" not in data
+        assert "hashed_password" not in data
 
     @pytest.mark.asyncio
     async def test_register_duplicate_email(self, client: AsyncClient, test_user: User, test_user_data: dict):
@@ -29,22 +28,12 @@ class TestAuthRegister:
         assert data["error"] == "CONFLICT"
 
     @pytest.mark.asyncio
-    async def test_register_duplicate_username(self, client: AsyncClient, test_user: User, test_user_data: dict):
-        """Test registration with duplicate username returns 409."""
-        test_user_data["email"] = "different@example.com"
-        response = await client.post("/api/v1/auth/register", json=test_user_data)
-
-        assert response.status_code == 409
-        data = response.json()
-        assert data["error"] == "CONFLICT"
-
-    @pytest.mark.asyncio
     async def test_register_invalid_email(self, client: AsyncClient):
         """Test registration with invalid email returns 422."""
         response = await client.post("/api/v1/auth/register", json={
             "email": "not-an-email",
-            "username": "testuser",
             "password": "Password123!",
+            "full_name": "Test User",
         })
 
         assert response.status_code == 422
@@ -56,8 +45,8 @@ class TestAuthRegister:
         """Test registration with short password returns 422."""
         response = await client.post("/api/v1/auth/register", json={
             "email": "test@example.com",
-            "username": "testuser",
             "password": "short",
+            "full_name": "Test User",
         })
 
         assert response.status_code == 422
