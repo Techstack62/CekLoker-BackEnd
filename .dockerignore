@@ -1,0 +1,52 @@
+# Git
+.git
+.gitignore
+
+# Virtual environment
+venv/
+.venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Documentation
+*.md
+!requirements.txt
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Upload files (regenerate in container)
+uploads/
+
+# Logs
+*.log
+logs/
+
+# Alembic (keep migrations but not cache)
+alembic/versions/*.py
+!alembic/versions/
