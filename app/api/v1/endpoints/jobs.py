@@ -1,3 +1,4 @@
+"""Job check endpoints with comprehensive error handling."""
 import uuid
 import asyncio
 import aiofiles
@@ -13,7 +14,6 @@ from slowapi.util import get_remote_address
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, get_db
 from app.models.loker_check import LokerCheck
@@ -30,6 +30,21 @@ from app.schemas.loker import (
     ShareResponse,
 )
 from app.services import ocr_service, scam_analysis_service
+from app.core.exceptions import (
+    NotFoundException,
+    ForbiddenException,
+    BadRequestException,
+    UnauthorizedException,
+    FileTooLargeException,
+    UnsupportedMediaTypeException,
+    FileCorruptedException,
+    ConflictException,
+    DraftNotSubmittedException,
+    AlreadySharedException,
+    NotSharedException,
+    DraftAlreadySubmittedException,
+    InternalServerException,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -51,22 +66,17 @@ IMAGE_FORMAT_EXTENSIONS = {
 MAX_FILE_SIZE_MB = 10
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
-# Upload directory for job images
 UPLOAD_DIR = Path("uploads/loker")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# Magic bytes signatures for image validation (High Priority security fix)
 MAGIC_BYTES = {
-    b"\xff\xd8\xff": "jpeg",  # JPEG signature
-    b"\x89PNG\r\n\x1a\n": "png",  # PNG signature
+    b"\xff\xd8\xff": "jpeg",
+    b"\x89PNG\r\n\x1a\n": "png",
 }
 
 
 def validate_magic_bytes(image_bytes: bytes) -> str | None:
-    """
-    Validate image based on magic bytes (file signature).
-    Returns the image type if valid, None otherwise.
-    """
+    """Validate image based on magic bytes."""
     for signature, img_type in MAGIC_BYTES.items():
         if image_bytes.startswith(signature):
             return img_type
@@ -74,17 +84,11 @@ def validate_magic_bytes(image_bytes: bytes) -> str | None:
 
 
 def validate_image_and_get_extension(image_bytes: bytes) -> str:
-    """
-    Validate uploaded bytes as a real image and return a safe extension.
-    Performs both magic bytes validation and PIL verification.
-    """
+    """Validate uploaded bytes as a real image and return safe extension."""
     magic_type = validate_magic_bytes(image_bytes)
     if magic_type is None:
-        logger.warning("Upload rejected: invalid magic bytes (possible file spoofing attempt)")
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="File bukan format gambar yang valid.",
-        )
+        logger.warning("Upload rejected: invalid magic bytes")
+        raise UnsupportedMediaTypeException("image/jpeg or image/png")
 
     try:
         with Image.open(io.BytesIO(image_bytes)) as image:
@@ -92,47 +96,28 @@ def validate_image_and_get_extension(image_bytes: bytes) -> str:
             image_format = image.format
     except (UnidentifiedImageError, OSError) as e:
         logger.warning(f"Upload rejected: PIL verification failed - {e}")
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="File bukan gambar valid atau file gambar rusak.",
-        )
+        raise FileCorruptedException()
 
     extension = IMAGE_FORMAT_EXTENSIONS.get(image_format)
     if extension is None:
-        logger.warning(f"Upload rejected: unsupported image format - {image_format}")
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Format file tidak didukung. Gunakan PNG atau JPG.",
-        )
+        raise UnsupportedMediaTypeException("image/jpeg or image/png")
 
     return extension
 
 
 async def read_file_with_size_limit(file: UploadFile, max_size: int) -> bytes:
-    """
-    Read file in chunks and validate size BEFORE loading entire file into memory.
-    This is a HIGH PRIORITY security fix to prevent DoS attacks.
-    """
+    """Read file in chunks and validate size."""
     chunks = []
     total_size = 0
-    chunk_size = 1024 * 1024  # 1MB chunks
+    chunk_size = 1024 * 1024
 
     while True:
         chunk = await file.read(chunk_size)
         if not chunk:
             break
-
         total_size += len(chunk)
-
         if total_size > max_size:
-            logger.warning(
-                f"Upload rejected: file size {total_size} bytes exceeds limit {max_size} bytes"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"Ukuran file melebihi batas {MAX_FILE_SIZE_MB} MB.",
-            )
-
+            raise FileTooLargeException(MAX_FILE_SIZE_MB)
         chunks.append(chunk)
 
     return b"".join(chunks)
@@ -144,7 +129,6 @@ async def read_file_with_size_limit(file: UploadFile, max_size: int) -> bytes:
     status_code=status.HTTP_201_CREATED,
     summary="Upload Gambar → OCR → Preview Hasil untuk Review",
     tags=["jobs"],
-    deprecated=False,
 )
 @limiter.limit("10/minute")
 async def upload_for_ocr(
@@ -153,33 +137,14 @@ async def upload_for_ocr(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Stage 1: Upload gambar untuk OCR dan review hasil.
-    
-    - Validasi tipe & ukuran file (DoS prevention)
-    - Validasi magic bytes (file spoofing prevention)
-    - Simpan gambar ke folder uploads/loker/
-    - Jalankan OCR untuk ekstrak teks
-    - Simpan hasil sebagai draft (belum dianalisis)
-    - Return hasil OCR untuk user review
-    """
+    """Stage 1: Upload gambar untuk OCR dan review hasil."""
     if file.content_type not in ALLOWED_CONTENT_TYPES:
-        logger.warning(f"Upload rejected: invalid content-type '{file.content_type}' from user {current_user.id}")
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Format file tidak didukung. Gunakan PNG atau JPG.",
-        )
+        raise UnsupportedMediaTypeException(file.content_type or "unknown")
 
     try:
         image_bytes = await read_file_with_size_limit(file, MAX_FILE_SIZE_BYTES)
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error reading uploaded file: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Gagal membaca file upload.",
-        )
 
     ext = validate_image_and_get_extension(image_bytes)
 
@@ -189,7 +154,7 @@ async def upload_for_ocr(
     async with aiofiles.open(save_path, "wb") as out_file:
         await out_file.write(image_bytes)
 
-    logger.info(f"Image saved: {image_filename} (user: {current_user.id}, size: {len(image_bytes)} bytes)")
+    logger.info(f"Image saved: {image_filename} (user: {current_user.id})")
 
     try:
         raw_text = await asyncio.to_thread(ocr_service.extract_text_from_image, image_bytes)
@@ -217,18 +182,15 @@ async def upload_for_ocr(
             is_draft=True,
             created_at=loker_check.created_at,
         )
+    except HTTPException:
+        await db.rollback()
+        save_path.unlink(missing_ok=True)
+        raise
     except Exception as exc:
         await db.rollback()
         save_path.unlink(missing_ok=True)
         logger.error(f"Error processing OCR: {exc}", exc_info=True)
-
-        if isinstance(exc, HTTPException):
-            raise exc
-
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Gagal memproses gambar. Detail: {exc}",
-        )
+        raise BadRequestException(message=f"Gagal memproses gambar. Detail: {exc}")
 
 
 @router.get(
@@ -243,9 +205,7 @@ async def get_drafts(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Mengembalikan semua draft (belum di-submit) milik user yang sedang login (paginated).
-    """
+    """Mengembalikan semua draft (belum di-submit) milik user (paginated)."""
     offset = (page - 1) * size
 
     count_result = await db.execute(
@@ -297,33 +257,21 @@ async def get_draft_detail(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Mengembalikan detail lengkap satu draft berdasarkan ID.
-    Hanya bisa diakses oleh pemilik draft tersebut.
-    """
+    """Mengembalikan detail lengkap satu draft berdasarkan ID."""
     result = await db.execute(
         select(LokerCheck).where(LokerCheck.id == draft_id)
     )
     draft = result.scalar_one_or_none()
 
     if draft is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Draft tidak ditemukan.",
-        )
+        raise NotFoundException("Draft", draft_id)
 
     if draft.user_id != current_user.id:
         logger.warning(f"Unauthorized draft access: user {current_user.id} tried to access draft_id {draft_id}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Anda tidak memiliki akses ke draft ini.",
-        )
+        raise ForbiddenException("Anda tidak memiliki akses ke draft ini.")
 
     if not draft.is_draft:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Draft sudah di-submit. Gunakan endpoint history.",
-        )
+        raise BadRequestException("Draft sudah di-submit. Gunakan endpoint history.")
 
     return OCRResultResponse(
         id=draft.id,
@@ -347,42 +295,27 @@ async def update_draft(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Mengupdate data OCR draft. User bisa mengoreksi hasil OCR yang salah.
-    Draft yang sudah di-submit tidak bisa diedit.
-    """
+    """Mengupdate data OCR draft."""
     result = await db.execute(
         select(LokerCheck).where(LokerCheck.id == draft_id)
     )
     draft = result.scalar_one_or_none()
 
     if draft is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Draft tidak ditemukan.",
-        )
+        raise NotFoundException("Draft", draft_id)
 
     if draft.user_id != current_user.id:
         logger.warning(f"Unauthorized draft update: user {current_user.id} tried to update draft_id {draft_id}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Anda tidak memiliki akses ke draft ini.",
-        )
+        raise ForbiddenException("Anda tidak memiliki akses ke draft ini.")
 
     if not draft.is_draft:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Draft sudah di-submit dan tidak bisa diedit.",
-        )
+        raise DraftAlreadySubmittedException("diedit")
 
-    # Update ocr_data with user corrections
     ocr_dict = draft.ocr_data or {}
     update_data = review.ocr_data.model_dump(exclude_unset=True)
     ocr_dict.update(update_data)
-
     draft.ocr_data = ocr_dict
 
-    # Also update individual fields for backwards compatibility
     if review.ocr_data.job_title is not None:
         draft.job_title = review.ocr_data.job_title
     if review.ocr_data.job_type is not None:
@@ -400,7 +333,6 @@ async def update_draft(
     if review.ocr_data.description is not None:
         draft.description = review.ocr_data.description
 
-    # Reset analysis results - need to resubmit after edit
     draft.scam_percentage = None
     draft.scam_category = None
     draft.scam_reason = None
@@ -431,46 +363,25 @@ async def submit_draft(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Submit draft untuk analisis scam.
-    
-    - Validasi draft exists & milik user
-    - Validasi bukan sudah di-submit
-    - Jalankan scam analysis
-    - Update is_draft=False, submitted_at=now()
-    - Return hasil lengkap
-    """
+    """Submit draft untuk analisis scam."""
     result = await db.execute(
         select(LokerCheck).where(LokerCheck.id == draft_id)
     )
     draft = result.scalar_one_or_none()
 
     if draft is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Draft tidak ditemukan.",
-        )
+        raise NotFoundException("Draft", draft_id)
 
     if draft.user_id != current_user.id:
         logger.warning(f"Unauthorized draft submit: user {current_user.id} tried to submit draft_id {draft_id}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Anda tidak memiliki akses ke draft ini.",
-        )
+        raise ForbiddenException("Anda tidak memiliki akses ke draft ini.")
 
     if not draft.is_draft:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Draft sudah di-submit sebelumnya.",
-        )
+        raise BadRequestException("Draft sudah di-submit sebelumnya.")
 
     if not draft.ocr_data:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Data OCR tidak valid.",
-        )
+        raise BadRequestException("Data OCR tidak valid.")
 
-    # Run scam analysis
     try:
         analysis = await asyncio.to_thread(scam_analysis_service.analyze_scam, draft.ocr_data)
 
@@ -486,13 +397,12 @@ async def submit_draft(
         logger.info(f"Draft submitted and analyzed: id={draft_id}, user={current_user.id}")
 
         return LokerCheckResponse.model_validate(draft)
+    except HTTPException:
+        raise
     except Exception as exc:
         await db.rollback()
         logger.error(f"Error analyzing draft: {exc}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Gagal menganalisis draft. Detail: {exc}",
-        )
+        raise BadRequestException(message=f"Gagal menganalisis draft. Detail: {exc}")
 
 
 @router.delete(
@@ -505,35 +415,22 @@ async def delete_draft(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Menghapus draft yang tidak diperlukan.
-    Draft yang sudah di-submit tidak bisa dihapus.
-    """
+    """Menghapus draft yang tidak diperlukan."""
     result = await db.execute(
         select(LokerCheck).where(LokerCheck.id == draft_id)
     )
     draft = result.scalar_one_or_none()
 
     if draft is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Draft tidak ditemukan.",
-        )
+        raise NotFoundException("Draft", draft_id)
 
     if draft.user_id != current_user.id:
         logger.warning(f"Unauthorized draft delete: user {current_user.id} tried to delete draft_id {draft_id}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Anda tidak memiliki akses ke draft ini.",
-        )
+        raise ForbiddenException("Anda tidak memiliki akses ke draft ini.")
 
     if not draft.is_draft:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Draft sudah di-submit dan tidak bisa dihapus.",
-        )
+        raise DraftAlreadySubmittedException("dihapus")
 
-    # Delete image file
     if draft.image_filename:
         image_path = UPLOAD_DIR / draft.image_filename
         if image_path.exists():
@@ -547,7 +444,6 @@ async def delete_draft(
     return {"message": "Draft berhasil dihapus."}
 
 
-# Legacy endpoint - kept for backwards compatibility
 @router.post(
     "/check",
     response_model=LokerCheckResponse,
@@ -563,15 +459,9 @@ async def check_loker_legacy(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    ⚠️ DEPRECATED: Gunakan endpoint POST /api/v1/jobs/ocr untuk alur baru dengan review OCR.
-    
-    Upload gambar pamflet loker untuk dianalisis (satu tahap langsung).
-    """
-    # Reuse OCR endpoint logic but auto-submit
+    """⚠️ DEPRECATED: Gunakan endpoint POST /api/v1/jobs/ocr untuk alur baru dengan review OCR."""
     ocr_response = await upload_for_ocr(request, file, db, current_user)
 
-    # Auto-submit for backwards compatibility
     result = await db.execute(
         select(LokerCheck).where(LokerCheck.id == ocr_response.id)
     )
@@ -605,10 +495,7 @@ async def get_history(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Mengembalikan riwayat pengecekan loker yang sudah di-submit (paginated).
-    Draft tidak termasuk dalam history.
-    """
+    """Mengembalikan riwayat pengecekan loker yang sudah di-submit (paginated)."""
     offset = (page - 1) * size
 
     count_result = await db.execute(
@@ -650,29 +537,18 @@ async def get_history_detail(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Mengembalikan detail lengkap satu hasil pengecekan berdasarkan ID.
-    Hanya bisa diakses oleh pemilik riwayat tersebut.
-    """
+    """Mengembalikan detail lengkap satu hasil pengecekan berdasarkan ID."""
     result = await db.execute(
         select(LokerCheck).where(LokerCheck.id == check_id)
     )
     check = result.scalar_one_or_none()
 
     if check is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Riwayat pengecekan tidak ditemukan.",
-        )
+        raise NotFoundException("Riwayat pengecekan", check_id)
 
     if check.user_id != current_user.id:
-        logger.warning(
-            f"Unauthorized access attempt: user {current_user.id} tried to access check_id {check_id}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Anda tidak memiliki akses ke riwayat ini.",
-        )
+        logger.warning(f"Unauthorized access: user {current_user.id} tried to access check_id {check_id}")
+        raise ForbiddenException("Anda tidak memiliki akses ke riwayat ini.")
 
     return LokerCheckResponse.model_validate(check)
 
@@ -688,43 +564,26 @@ async def get_history_image(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Mengembalikan file gambar pamflet untuk riwayat milik user yang sedang login.
-    Endpoint ini menjaga agar user hanya bisa mengakses gambar miliknya sendiri.
-    """
+    """Mengembalikan file gambar pamflet untuk riwayat milik user."""
     result = await db.execute(
         select(LokerCheck).where(LokerCheck.id == check_id)
     )
     check = result.scalar_one_or_none()
 
     if check is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Riwayat pengecekan tidak ditemukan.",
-        )
+        raise NotFoundException("Riwayat pengecekan", check_id)
 
     if check.user_id != current_user.id:
-        logger.warning(
-            f"Unauthorized image access attempt: user {current_user.id} tried to access image for check_id {check_id}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Anda tidak memiliki akses ke gambar ini.",
-        )
+        logger.warning(f"Unauthorized image access: user {current_user.id} tried to access image for check_id {check_id}")
+        raise ForbiddenException("Anda tidak memiliki akses ke gambar ini.")
 
     if not check.image_filename:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Gambar tidak tersedia.",
-        )
+        raise NotFoundException("Gambar", "tidak tersedia")
 
     image_path = UPLOAD_DIR / check.image_filename
     if not image_path.is_file():
         logger.error(f"Image file not found: {image_path}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="File gambar tidak ditemukan di server.",
-        )
+        raise NotFoundException("File gambar", "tidak ditemukan di server")
 
     return FileResponse(path=image_path)
 
@@ -743,46 +602,25 @@ async def share_to_community(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Share hasil pengecekan loker ke community.
-    
-    - Validasi hasil exists & milik user
-    - Validasi sudah di-submit (bukan draft)
-    - Validasi belum dishare
-    - Update is_shared=True, shared_at=now()
-    - Return hasil share
-    """
+    """Share hasil pengecekan loker ke community."""
     result = await db.execute(
         select(LokerCheck).where(LokerCheck.id == check_id)
     )
     check = result.scalar_one_or_none()
 
     if check is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Hasil pengecekan tidak ditemukan.",
-        )
+        raise NotFoundException("Hasil pengecekan", check_id)
 
     if check.user_id != current_user.id:
-        logger.warning(f"Unauthorized share attempt: user {current_user.id} tried to share check_id {check_id}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Anda tidak memiliki akses ke hasil ini.",
-        )
+        logger.warning(f"Unauthorized share: user {current_user.id} tried to share check_id {check_id}")
+        raise ForbiddenException("Anda tidak memiliki akses ke hasil ini.")
 
     if check.is_draft:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Hasil harus di-submit terlebih dahulu sebelum dishare.",
-        )
+        raise DraftNotSubmittedException()
 
     if check.is_shared:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Hasil sudah dishare ke community.",
-        )
+        raise AlreadySharedException()
 
-    # Update sharing status
     check.is_shared = True
     check.shared_at = datetime.utcnow()
     check.share_anonymous = share_request.anonymous
@@ -790,7 +628,7 @@ async def share_to_community(
     await db.commit()
     await db.refresh(check)
 
-    logger.info(f"Check shared to community: id={check_id}, user={current_user.id}, anonymous={share_request.anonymous}")
+    logger.info(f"Check shared: id={check_id}, user={current_user.id}, anonymous={share_request.anonymous}")
 
     return ShareResponse(
         message="Berhasil dishare ke community." if not share_request.anonymous else "Berhasil dishare ke community secara anonymous.",
@@ -810,46 +648,29 @@ async def unshare_from_community(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Tarik kembali hasil pengecekan dari community.
-    
-    - Validasi hasil exists & milik user
-    - Validasi sudah dishare
-    - Update is_shared=False, shared_at=None
-    - Return hasil unshare
-    """
+    """Tarik kembali hasil pengecekan dari community."""
     result = await db.execute(
         select(LokerCheck).where(LokerCheck.id == check_id)
     )
     check = result.scalar_one_or_none()
 
     if check is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Hasil pengecekan tidak ditemukan.",
-        )
+        raise NotFoundException("Hasil pengecekan", check_id)
 
     if check.user_id != current_user.id:
-        logger.warning(f"Unauthorized unshare attempt: user {current_user.id} tried to unshare check_id {check_id}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Anda tidak memiliki akses ke hasil ini.",
-        )
+        logger.warning(f"Unauthorized unshare: user {current_user.id} tried to unshare check_id {check_id}")
+        raise ForbiddenException("Anda tidak memiliki akses ke hasil ini.")
 
     if not check.is_shared:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Hasil belum dishare ke community.",
-        )
+        raise NotSharedException()
 
-    # Update sharing status
     check.is_shared = False
     check.shared_at = None
     check.share_anonymous = False
 
     await db.commit()
 
-    logger.info(f"Check unshared from community: id={check_id}, user={current_user.id}")
+    logger.info(f"Check unshared: id={check_id}, user={current_user.id}")
 
     return ShareResponse(
         message="Berhasil dihapus dari community.",

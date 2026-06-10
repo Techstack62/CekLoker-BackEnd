@@ -1,3 +1,4 @@
+"""Profile endpoints with comprehensive error handling."""
 import uuid
 import logging
 import aiofiles
@@ -12,6 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db, get_current_user
 from app.models.user import User
 from app.schemas.user import ProfileResponse, UserUpdate
+from app.core.exceptions import (
+    NotFoundException,
+    FileTooLargeException,
+    UnsupportedMediaTypeException,
+    FileCorruptedException,
+    InternalServerException,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -22,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Konfigurasi upload profile image
 PROFILE_UPLOAD_DIR = Path("uploads/profile")
 PROFILE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -34,15 +41,14 @@ IMAGE_FORMAT_EXTENSIONS = {
 MAX_FILE_SIZE_MB = 5
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
-# Magic bytes signatures for image validation (Security fix)
 MAGIC_BYTES = {
-    b"\xff\xd8\xff": "jpeg",  # JPEG signature
-    b"\x89PNG\r\n\x1a\n": "png",  # PNG signature
+    b"\xff\xd8\xff": "jpeg",
+    b"\x89PNG\r\n\x1a\n": "png",
 }
 
 
 def validate_magic_bytes(image_bytes: bytes) -> str | None:
-    """Validate image based on magic bytes (file signature)."""
+    """Validate image based on magic bytes."""
     for signature, img_type in MAGIC_BYTES.items():
         if image_bytes.startswith(signature):
             return img_type
@@ -50,15 +56,11 @@ def validate_magic_bytes(image_bytes: bytes) -> str | None:
 
 
 def validate_image_and_get_extension(image_bytes: bytes) -> str:
-    """Validasi uploaded bytes sebagai gambar valid dan return safe extension."""
-    # First validate magic bytes
+    """Validate uploaded bytes as a real image and return safe extension."""
     magic_type = validate_magic_bytes(image_bytes)
     if magic_type is None:
         logger.warning("Profile image upload rejected: invalid magic bytes")
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="File bukan format gambar yang valid.",
-        )
+        raise UnsupportedMediaTypeException("image/jpeg or image/png")
 
     try:
         with Image.open(io.BytesIO(image_bytes)) as image:
@@ -66,42 +68,28 @@ def validate_image_and_get_extension(image_bytes: bytes) -> str:
             image_format = image.format
     except (UnidentifiedImageError, OSError) as e:
         logger.warning(f"Profile image upload rejected: PIL verification failed - {e}")
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="File bukan gambar valid atau file gambar rusak.",
-        )
+        raise FileCorruptedException()
 
     extension = IMAGE_FORMAT_EXTENSIONS.get(image_format)
     if extension is None:
-        logger.warning(f"Profile image upload rejected: unsupported format - {image_format}")
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Format file tidak didukung. Gunakan PNG atau JPG.",
-        )
+        raise UnsupportedMediaTypeException("image/jpeg or image/png")
 
     return extension
 
 
 async def read_file_with_size_limit(file: UploadFile, max_size: int) -> bytes:
-    """Read file in chunks and validate size BEFORE loading entire file into memory. (DoS prevention)"""
+    """Read file in chunks and validate size."""
     chunks = []
     total_size = 0
-    chunk_size = 512 * 1024  # 512KB chunks
+    chunk_size = 512 * 1024
 
     while True:
         chunk = await file.read(chunk_size)
         if not chunk:
             break
-
         total_size += len(chunk)
-
         if total_size > max_size:
-            logger.warning(f"Profile image upload rejected: size {total_size} exceeds limit {max_size}")
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"Ukuran file melebihi batas {MAX_FILE_SIZE_MB} MB.",
-            )
-
+            raise FileTooLargeException(MAX_FILE_SIZE_MB)
         chunks.append(chunk)
 
     return b"".join(chunks)
@@ -166,25 +154,14 @@ async def upload_profile_image(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload atau ganti gambar profile user dengan security improvements."""
+    """Upload atau ganti gambar profile user."""
     if file.content_type not in ALLOWED_CONTENT_TYPES:
-        logger.warning(f"Profile image rejected: invalid content-type '{file.content_type}' from user {current_user.id}")
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Format file tidak didukung. Gunakan PNG atau JPG.",
-        )
+        raise UnsupportedMediaTypeException(file.content_type or "unknown")
 
-    # Read file with size validation BEFORE loading to memory
     try:
         image_bytes = await read_file_with_size_limit(file, MAX_FILE_SIZE_BYTES)
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error reading profile image: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Gagal membaca file upload.",
-        )
 
     ext = validate_image_and_get_extension(image_bytes)
 
@@ -198,7 +175,7 @@ async def upload_profile_image(
     async with aiofiles.open(save_path, "wb") as out_file:
         await out_file.write(image_bytes)
 
-    logger.info(f"Profile image uploaded: {new_filename} (user: {current_user.id}, size: {len(image_bytes)} bytes)")
+    logger.info(f"Profile image uploaded: {new_filename} (user: {current_user.id})")
 
     current_user.profile_image = new_filename
     await db.commit()
@@ -217,21 +194,14 @@ async def get_profile_image(
 ):
     """Mengambil gambar profile user yang sedang login."""
     if not current_user.profile_image:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Gambar profile tidak tersedia. Silakan upload gambar profile terlebih dahulu.",
-        )
+        raise NotFoundException("Gambar profile", "tidak tersedia")
 
     image_path = PROFILE_UPLOAD_DIR / current_user.profile_image
 
     if not image_path.is_file():
         logger.error(f"Profile image file not found: {image_path}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="File gambar profile tidak ditemukan di server.",
-        )
+        raise NotFoundException("File gambar profile", "tidak ditemukan di server")
 
-    # Determine media type based on extension
     media_type = "image/jpeg" if image_path.suffix.lower() == ".jpg" else "image/png"
 
     logger.info(f"Profile image accessed: user_id={current_user.id}")

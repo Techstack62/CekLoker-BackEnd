@@ -1,61 +1,151 @@
-from datetime import timedelta
+"""Authentication endpoints with comprehensive error handling."""
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from passlib.context import CryptContext
 
 from app.api.deps import get_db
-from app.core.config import settings
-from app.core.security import verify_password, get_password_hash, create_access_token
+from app.core.exceptions import (
+    ConflictException,
+    UnauthorizedException,
+    InternalServerException,
+)
 from app.models.user import User
-from app.schemas.token import Token
-from app.schemas.user import UserCreate, UserResponse
+from app.schemas.user import UserCreate, UserLogin, Token, UserResponse
+from app.core.security import create_access_token
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.post("/register", response_model=UserResponse)
-async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
-    email = user_in.email.lower()
-    stmt = select(User).where(User.email == email)
-    result = await db.execute(stmt)
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The user with this email already exists in the system.",
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify password against hash."""
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password: str) -> str:
+    """Hash password."""
+    return pwd_context.hash(password)
+
+
+@router.post(
+    "/register",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Daftar Akun Baru",
+    tags=["auth"],
+)
+async def register(
+    user_data: UserCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Register new user account.
+    
+    Error handling:
+    - 409 Conflict: Email or username already registered
+    - 422 Validation Error: Invalid input data
+    """
+    # Check if email already exists
+    result = await db.execute(
+        select(User).where(User.email == user_data.email)
+    )
+    existing_email = result.scalar_one_or_none()
+    
+    if existing_email:
+        logger.warning(f"Registration failed: email '{user_data.email}' already registered")
+        raise ConflictException(
+            message="Email sudah terdaftar. Silakan gunakan email lain.",
+            existing_resource=f"Email: {user_data.email}"
         )
     
-    new_user = User(
-        email=email,
-        hashed_password=get_password_hash(user_in.password),
-        full_name=user_in.full_name,
-        is_active=True
+    # Check if username already exists
+    result = await db.execute(
+        select(User).where(User.username == user_data.username)
     )
-    db.add(new_user)
-    await db.commit()
-    await db.refresh(new_user)
-    return new_user
+    existing_username = result.scalar_one_or_none()
+    
+    if existing_username:
+        logger.warning(f"Registration failed: username '{user_data.username}' already registered")
+        raise ConflictException(
+            message="Username sudah digunakan. Silakan gunakan username lain.",
+            existing_resource=f"Username: {user_data.username}"
+        )
+    
+    # Create new user
+    hashed_password = get_password_hash(user_data.password)
+    new_user = User(
+        email=user_data.email,
+        username=user_data.username,
+        password_hash=hashed_password,
+        full_name=user_data.full_name,
+    )
+    
+    try:
+        db.add(new_user)
+        await db.commit()
+        await db.refresh(new_user)
+        
+        logger.info(f"User registered successfully: {new_user.email}")
+        
+        return new_user
+    except Exception as exc:
+        await db.rollback()
+        logger.error(f"Registration failed: {exc}", exc_info=True)
+        raise InternalServerException("Gagal membuat akun. Silakan coba lagi.")
 
-@router.post("/login", response_model=Token)
+
+@router.post(
+    "/login",
+    response_model=Token,
+    summary="Login dan Dapatkan JWT Token",
+    tags=["auth"],
+)
 async def login(
+    credentials: UserLogin,
     db: AsyncSession = Depends(get_db),
-    form_data: OAuth2PasswordRequestForm = Depends()
 ):
-    email = form_data.username.lower()
-    stmt = select(User).where(User.email == email)
-    result = await db.execute(stmt)
+    """
+    Authenticate user and return JWT access token.
+    
+    Error handling:
+    - 401 Unauthorized: Invalid email or password
+    - 403 Forbidden: Account not active
+    """
+    # Find user by email
+    result = await db.execute(
+        select(User).where(User.email == credentials.email)
+    )
     user = result.scalar_one_or_none()
     
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    elif not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
-
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        subject=user.id, expires_delta=access_token_expires
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
+    # Security: Use same error message for both email not found and wrong password
+    # This prevents user enumeration attacks
+    if user is None or not verify_password(credentials.password, user.password_hash):
+        logger.warning(f"Login failed for email: {credentials.email}")
+        raise UnauthorizedException("Email atau password salah.")
+    
+    # Check if account is active
+    if not user.is_active:
+        logger.warning(f"Login failed: account inactive for user {user.id}")
+        raise UnauthorizedException("Akun tidak aktif. Silakan hubungi admin.")
+    
+    # Create access token
+    try:
+        access_token = create_access_token(data={"sub": str(user.id)})
+        
+        logger.info(f"User logged in successfully: {user.email}")
+        
+        return Token(access_token=access_token, token_type="bearer")
+    except Exception as exc:
+        logger.error(f"Token creation failed: {exc}", exc_info=True)
+        raise InternalServerException("Gagal membuat token. Silakan coba lagi.")

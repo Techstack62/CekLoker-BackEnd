@@ -21,9 +21,7 @@ Proyek ini dibangun menggunakan arsitektur modular (Clean Architecture) dengan t
 
 ---
 
-## Fitur
-
-### 🔐 Autentikasi
+## Fitur### 🔐 Autentikasi
 - **Register** — Daftar akun baru, password di-hash dengan Bcrypt.
 - **Login** — Autentikasi dan mendapatkan JWT Access Token.
 
@@ -81,7 +79,9 @@ app/
 ├── core/
 │   ├── config.py                # Konfigurasi environment variables
 │   ├── database.py              # Koneksi async database
-│   └── security.py             # JWT & hashing utilities
+│   ├── security.py             # JWT & hashing utilities
+│   ├── errors.py               # Error code constants
+│   └── exceptions.py           # Custom exception classes
 ├── models/
 │   ├── base.py                  # SQLAlchemy Base
 │   ├── user.py                  # Model User
@@ -104,72 +104,100 @@ alembic/                         # Migrasi database
 
 ---
 
-## Prasyarat (Prerequisites)
+## Error Handling
 
-- Python 3.10+
-- PostgreSQL Server
+Semua endpoint API menggunakan **standardized error response format** untuk konsistensi dan kemudahan debugging.
 
----
+### Standard Error Response Format
 
-## Setup (Local Development)
-
-### 1. Clone & Setup Virtual Environment
-```bash
-git clone https://github.com/Techstack62/CekLoker-BackEnd.git
-cd CekLoker-BackEnd
-
-python -m venv venv
-
-# Windows PowerShell
-.\venv\Scripts\Activate.ps1
-
-# Linux / Mac
-# source venv/bin/activate
+```json
+{
+  "error": "ERROR_CODE",
+  "message": "Pesan error dalam Bahasa Indonesia",
+  "details": { ... },
+  "timestamp": "2026-06-10T14:49:00Z"
+}
 ```
 
-### 2. Install Dependensi
-```bash
-pip install -r requirements.txt
+### HTTP Status Codes
+
+| Code | Description | Usage |
+|------|-------------|-------|
+| 200 | OK | GET, PUT, PATCH successful |
+| 201 | Created | POST successful (resource created) |
+| 204 | No Content | DELETE successful (no body response) |
+| 400 | Bad Request | Invalid request format, malformed JSON |
+| 401 | Unauthorized | Missing or invalid authentication token |
+| 403 | Forbidden | Authenticated but not authorized for this action |
+| 404 | Not Found | Resource does not exist |
+| 409 | Conflict | Resource already exists, duplicate entry |
+| 413 | Payload Too Large | File size exceeds limit |
+| 415 | Unsupported Media Type | Content-Type not supported |
+| 422 | Unprocessable Entity | Validation error (Pydantic validation failed) |
+| 429 | Too Many Requests | Rate limit exceeded |
+| 500 | Internal Server Error | Unexpected server error |
+
+### Error Codes
+
+| Error Code | HTTP Status | Description |
+|------------|-------------|--------------|
+| `UNAUTHORIZED` | 401 | Authentication required |
+| `FORBIDDEN` | 403 | No access to resource |
+| `NOT_FOUND` | 404 | Resource not found |
+| `CONFLICT` | 409 | Resource already exists |
+| `BAD_REQUEST` | 400 | Invalid request |
+| `VALIDATION_ERROR` | 422 | Data validation failed |
+| `FILE_TOO_LARGE` | 413 | File size exceeds limit |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | File format not supported |
+| `FILE_CORRUPTED` | 422 | Invalid or corrupted file |
+| `RATE_LIMIT_EXCEEDED` | 429 | Too many requests |
+| `INTERNAL_SERVER_ERROR` | 500 | Server error |
+
+### Example Error Responses
+
+#### 401 Unauthorized
+```json
+{
+  "error": "UNAUTHORIZED",
+  "message": "Autentikasi diperlukan. Silakan login terlebih dahulu.",
+  "details": null,
+  "timestamp": "2026-06-10T14:49:00Z"
+}
 ```
 
-> **Catatan:** EasyOCR akan mengunduh model OCR-nya pada pertama kali dijalankan (~100 MB). Pastikan koneksi internet tersedia.
-
-### 3. Konfigurasi Environment Variables
-Salin `.env.example` menjadi `.env` lalu sesuaikan:
-```bash
-cp .env.example .env
+#### 404 Not Found
+```json
+{
+  "error": "NOT_FOUND",
+  "message": "Draft dengan ID 123 tidak ditemukan.",
+  "details": {"resource_type": "Draft", "resource_id": "123"},
+  "timestamp": "2026-06-10T14:49:00Z"
+}
 ```
 
-Isi variabel berikut di `.env`:
-```env
-DATABASE_URL=postgresql+asyncpg://<USER>:<PASSWORD>@localhost:5432/<DB_NAME>
-SECRET_KEY=<random-secret-key-minimal-32-karakter>
-ACCESS_TOKEN_EXPIRE_MINUTES=1440
-DB_ECHO=false
-BACKEND_CORS_ORIGINS=["http://localhost:3000","http://localhost:5173"]
+#### 422 Validation Error
+```json
+{
+  "error": "VALIDATION_ERROR",
+  "message": "Validasi data gagal.",
+  "details": {
+    "field_errors": [
+      {"field": "email", "message": "Format email tidak valid."}
+    ]
+  },
+  "timestamp": "2026-06-10T14:49:00Z"
+}
 ```
 
-> `SECRET_KEY` wajib minimal 32 karakter. `DB_ECHO=true` hanya disarankan saat debugging lokal karena akan menampilkan query SQL ke log.
-
-### 4. Setup Database & Migrasi
-```bash
-alembic upgrade head
+#### 500 Internal Server Error
+```json
+{
+  "error": "INTERNAL_SERVER_ERROR",
+  "message": "Terjadi kesalahan pada server. Silakan coba lagi nanti.",
+  "details": null,
+  "timestamp": "2026-06-10T14:49:00Z"
+}
 ```
-
-### 5. Jalankan Server
-```bash
-uvicorn app.main:app --reload
-```
-
-Server berjalan di `http://localhost:8000`.
-
----
-
-## Dokumentasi API
-
-Setelah server berjalan, akses dokumentasi interaktif di:
-- **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
 
 ---
 
@@ -213,18 +241,6 @@ Setelah server berjalan, akses dokumentasi interaktif di:
 | `GET` | `/` | Community feed (paginated, filterable) | ❌ |
 | `GET` | `/{report_id}` | Detail satu report di community | ❌ |
 
-#### Community Feed Filters
-
-| Parameter | Tipe | Deskripsi |
-|---|---|---|
-| `page` | int | Nomor halaman (default 1) |
-| `size` | int | Jumlah item per halaman (default 10, max 100) |
-| `company` | string | Filter by company name (partial match) |
-| `scam_category` | string | Filter by scam category |
-| `min_scam` | float | Filter minimum scam percentage |
-| `max_scam` | float | Filter maximum scam percentage |
-| `search` | string | Search across job_title and company_name |
-
 ### Profile (`/api/v1/profile`)
 
 | Method | Endpoint | Deskripsi | Auth |
@@ -239,53 +255,63 @@ Setelah server berjalan, akses dokumentasi interaktif di:
 
 ---
 
-## Alur Two-Stage Job Check
+## Setup (Local Development)
 
+###1. Clone & Setup Virtual Environment
+```bash
+git clone https://github.com/Techstack62/CekLoker-BackEnd.git
+cd CekLoker-BackEnd
+
+python -m venv venv
+
+# Windows PowerShell
+.\venv\Scripts\Activate.ps1
+
+# Linux / Mac
+# source venv/bin/activate
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    STAGE 1: OCR & REVIEW                     │
-├─────────────────────────────────────────────────────────────┤
-│  1. User upload gambar                                       │
-│  2. Sistem jalankan OCR → extract teks                       │
-│  3. Sistem parse hasil OCR ke structured data                │
-│  4. Return hasil OCR untuk user review                       │
-│  5. Data disimpan sebagai DRAFT (belum dianalisis)           │
-│                                                              │
-│  User bisa:                                                  │
-│  - Lihat list draft                                          │
-│  - Edit/koreksi hasil OCR                                    │
-│  - Submit untuk analisis                                     │
-│  - Hapus draft yang tidak diperlukan                         │
-└─────────────────────────────────────────────────────────────┘
-                           ↓
-┌─────────────────────────────────────────────────────────────┐
-│                 STAGE 2: ANALISIS SCAM                       │
-├─────────────────────────────────────────────────────────────┤
-│  1. User submit draft                                        │
-│  2. Sistem jalankan scam analysis                            │
-│  3. Update is_draft=False, submitted_at=now()                │
-│  4. Simpan hasil analisis                                    │
-│  5. Data masuk ke riwayat user                               │
-└─────────────────────────────────────────────────────────────┘
+
+### 2. Install Dependensi
+```bash
+pip install -r requirements.txt
 ```
+
+> **Catatan:** EasyOCR akan mengunduh model OCR-nya pada pertama kali dijalankan (~100 MB). Pastikan koneksi internet tersedia.
+
+### 3. Konfigurasi Environment Variables
+Salin `.env.example` menjadi `.env` lalu sesuaikan:
+```bash
+cp .env.example .env
+```
+
+Isi variabel berikut di `.env`:
+```env
+DATABASE_URL=postgresql+asyncpg://<USER>:<PASSWORD>@localhost:5432/<DB_NAME>
+SECRET_KEY=<random-secret-key-minimal-32-karakter>
+ACCESS_TOKEN_EXPIRE_MINUTES=1440
+DB_ECHO=false
+BACKEND_CORS_ORIGINS=["http://localhost:3000","http://localhost:5173"]
+```
+
+### 4. Setup Database & Migrasi
+```bash
+alembic upgrade head
+```
+
+### 5. Jalankan Server
+```bash
+uvicorn app.main:app --reload
+```
+
+Server berjalan di `http://localhost:8000`.
 
 ---
 
-## Community Sharing Flow
+## Dokumentasi API
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                 COMMUNITY SHARING FLOW                       │
-├─────────────────────────────────────────────────────────────┤
-│  1. User selesaikan cek loker (submit draft)                 │
-│  2. User bisa pilih untuk share ke community                  │
-│  3a. Jika anonymous → nama user tidak ditampilkan            │
-│  3b. Jika tidak anonymous → nama user ditampilkan           │
-│  4. Hasil dishare ke community feed                           │
-│  5. Orang lain bisa melihat, search, dan filter              │
-│  6. User bisa unshare kapan saja                             │
-└─────────────────────────────────────────────────────────────┘
-```
+Setelah server berjalan, akses dokumentasi interaktif di:
+- **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
 
 ---
 
@@ -304,6 +330,7 @@ Setelah server berjalan, akses dokumentasi interaktif di:
 - **Cleanup Otomatis**: Gambar lama secara otomatis dihapus saat upload baru
 - **Cascade Delete**: Saat akun dihapus, semua data terkait ikut dihapus
 - **Logging**: Security events di-log untuk monitoring
+- **Consistent Error Handling**: Semua endpoint menggunakan standardized error format
 
 ### Privacy di Community Feed
 
@@ -314,9 +341,11 @@ Data yang dishare ke community sudah di-mask untuk melindungi privasi:
 User bisa memilih untuk share secara anonymous atau dengan nama.
 
 ### Mock AI Model
+
 Analisis scam saat ini menggunakan **mock implementation** berbasis keyword matching. Modul ini dirancang secara modular di [`app/services/scam_analysis_service.py`](app/services/scam_analysis_service.py) — cukup ganti body fungsi `analyze_scam()` ketika model AI yang sesungguhnya sudah siap, tanpa perlu mengubah kode lain.
 
 ### Penyimpanan Gambar
+
 Gambar yang diupload disimpan secara lokal di folder `uploads/` dengan nama file UUID:
 
 - **Gambar Pamflet Loker**: `uploads/loker/`
@@ -337,17 +366,3 @@ Authorization: Bearer <token>
 ```
 
 Endpoint tersebut memastikan hanya pemilik yang dapat mengakses gambar. Untuk production, disarankan menggunakan object storage seperti AWS S3, Google Cloud Storage, atau Supabase Storage.
-
-### Two-Stage Workflow Benefits
-
-1. **Akurasi Lebih Tinggi**: User bisa mengoreksi hasil OCR sebelum analisis
-2. **Kontrol Penuh**: User punya waktu untuk review sebelum submit
-3. **Fleksibel**: User bisa simpan banyak draft sebelum memutuskan
-4. **Tidak Ada Pressure**: Tidak ada batasan waktu untuk submit
-
-### Community Sharing Benefits
-
-1. **Sharing Knowledge**: User bisa berbagi temuan loker mencurigakan
-2. **Social Proof**: Orang lain bisa melihat apakah suatu lowongan sudah di-check
-3. **Community Awareness**: Membangun database knowledge tentang loker mencurigakan
-4. **Privacy Control**: User punya kontrol penuh (anonymous option, unshare kapan saja)
