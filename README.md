@@ -21,13 +21,13 @@ Proyek ini dibangun menggunakan arsitektur modular (Clean Architecture) dengan t
 
 ---
 
-## Fitur### 🔐 Autentikasi
+## Fitur Utama
+
+### 🔐 Autentikasi
 - **Register** — Daftar akun baru, password di-hash dengan Bcrypt.
 - **Login** — Autentikasi dan mendapatkan JWT Access Token.
 
 ### 🔍 Cek Loker (Deteksi Scam) - Two-Stage Workflow
-
-Fitur cek loker menggunakan alur **dua tahap** yang memberikan kontrol penuh kepada user:
 
 #### Stage 1: OCR & Review
 - Upload gambar pamflet lowongan kerja (PNG/JPG, maks 10 MB).
@@ -63,203 +63,9 @@ Fitur cek loker menggunakan alur **dua tahap** yang memberikan kontrol penuh kep
 
 ---
 
-## Struktur Project
-
-```
-app/
-├── api/
-│   ├── deps.py                  # Dependency injection (auth, db session)
-│   └── v1/
-│       ├── api.py               # Router utama API v1
-│       ├── responses.py         # Helper function untuk dokumentasi status code
-│       └── endpoints/
-│           ├── auth.py          # Endpoint autentikasi
-│           ├── jobs.py          # Endpoint cek loker & riwayat (two-stage)
-│           ├── profile.py       # Endpoint profile user
-│           └── community.py     # Endpoint community feed
-├── core/
-│   ├── config.py                # Konfigurasi environment variables
-│   ├── database.py              # Koneksi async database
-│   ├── security.py             # JWT & hashing utilities
-│   ├── errors.py               # Error code constants
-│   └── exceptions.py           # Custom exception classes
-├── models/
-│   ├── base.py                  # SQLAlchemy Base
-│   ├── user.py                  # Model User
-│   └── loker_check.py          # Model LokerCheck (hasil cek loker)
-├── schemas/
-│   ├── token.py                 # Schema JWT token
-│   ├── user.py                  # Schema request/response user
-│   ├── loker.py                 # Schema request/response cek loker
-│   └── responses.py             # Schema untuk dokumentasi Swagger responses
-├── services/
-│   ├── ocr_service.py           # OCR extraction & parsing
-│   └── scam_analysis_service.py # Scam analysis (mock AI — modular)
-└── main.py                      # Entry point FastAPI app
-
-uploads/
-├── loker/                       # Gambar pamflet yang diupload user
-└── profile/                      # Gambar profile user
-
-alembic/                         # Migrasi database
-```
-
----
-
-## Error Handling
-
-Semua endpoint API menggunakan **standardized error response format** untuk konsistensi dan kemudahan debugging.
-
-### Standard Error Response Format
-
-```json
-{
-  "error": "ERROR_CODE",
-  "message": "Pesan error dalam Bahasa Indonesia",
-  "details": { ... },
-  "timestamp": "2026-06-10T14:49:00Z"
-}
-```
-
-### HTTP Status Codes
-
-| Code | Description | Usage |
-|------|-------------|-------|
-| 200 | OK | GET, PUT, PATCH successful |
-| 201 | Created | POST successful (resource created) |
-| 204 | No Content | DELETE successful (no body response) |
-| 400 | Bad Request | Invalid request format, malformed JSON |
-| 401 | Unauthorized | Missing or invalid authentication token |
-| 403 | Forbidden | Authenticated but not authorized for this action |
-| 404 | Not Found | Resource does not exist |
-| 409 | Conflict | Resource already exists, duplicate entry |
-| 413 | Payload Too Large | File size exceeds limit |
-| 415 | Unsupported Media Type | Content-Type not supported |
-| 422 | Unprocessable Entity | Validation error (Pydantic validation failed) |
-| 429 | Too Many Requests | Rate limit exceeded |
-| 500 | Internal Server Error | Unexpected server error |
-
-### Error Codes
-
-| Error Code | HTTP Status | Description |
-|------------|-------------|--------------|
-| `UNAUTHORIZED` | 401 | Authentication required |
-| `FORBIDDEN` | 403 | No access to resource |
-| `NOT_FOUND` | 404 | Resource not found |
-| `CONFLICT` | 409 | Resource already exists |
-| `BAD_REQUEST` | 400 | Invalid request |
-| `VALIDATION_ERROR` | 422 | Data validation failed |
-| `FILE_TOO_LARGE` | 413 | File size exceeds limit |
-| `UNSUPPORTED_MEDIA_TYPE` | 415 | File format not supported |
-| `FILE_CORRUPTED` | 422 | Invalid or corrupted file |
-| `RATE_LIMIT_EXCEEDED` | 429 | Too many requests |
-| `INTERNAL_SERVER_ERROR` | 500 | Server error |
-
-### Example Error Responses
-
-#### 401 Unauthorized
-```json
-{
-  "error": "UNAUTHORIZED",
-  "message": "Autentikasi diperlukan. Silakan login terlebih dahulu.",
-  "details": null,
-  "timestamp": "2026-06-10T14:49:00Z"
-}
-```
-
-#### 404 Not Found
-```json
-{
-  "error": "NOT_FOUND",
-  "message": "Draft dengan ID 123 tidak ditemukan.",
-  "details": {"resource_type": "Draft", "resource_id": "123"},
-  "timestamp": "2026-06-10T14:49:00Z"
-}
-```
-
-#### 422 Validation Error
-```json
-{
-  "error": "VALIDATION_ERROR",
-  "message": "Validasi data gagal.",
-  "details": {
-    "field_errors": [
-      {"field": "email", "message": "Format email tidak valid."}
-    ]
-  },
-  "timestamp": "2026-06-10T14:49:00Z"
-}
-```
-
-#### 500 Internal Server Error
-```json
-{
-  "error": "INTERNAL_SERVER_ERROR",
-  "message": "Terjadi kesalahan pada server. Silakan coba lagi nanti.",
-  "details": null,
-  "timestamp": "2026-06-10T14:49:00Z"
-}
-```
-
----
-
-## Endpoint API
-
-### Auth (`/api/v1/auth`)
-
-| Method | Endpoint | Deskripsi | Auth |
-|---|---|---|---|
-| `POST` | `/register` | Daftar akun baru | ❌ |
-| `POST` | `/login` | Login & dapatkan JWT token | ❌ |
-
-### Jobs (`/api/v1/jobs`) - Two-Stage Workflow
-
-#### OCR & Draft Endpoints
-
-| Method | Endpoint | Deskripsi | Auth |
-|---|---|---|---|
-| `POST` | `/ocr` | Upload gambar → OCR → return hasil untuk review | ✅ |
-| `GET` | `/drafts` | List semua draft user (paginated) | ✅ |
-| `GET` | `/drafts/{draft_id}` | Detail satu draft | ✅ |
-| `PUT` | `/drafts/{draft_id}` | Update/edit hasil OCR draft | ✅ |
-| `POST` | `/drafts/{draft_id}/submit` | Submit draft untuk analisis scam | ✅ |
-| `DELETE` | `/drafts/{draft_id}` | Hapus draft | ✅ |
-
-#### History & Sharing Endpoints
-
-| Method | Endpoint | Deskripsi | Auth |
-|---|---|---|---|
-| `POST` | `/check` | ⚠️ **Deprecated** — Gunakan `/ocr` | ✅ |
-| `GET` | `/history` | Riwayat cek loker yang sudah di-submit (paginated) | ✅ |
-| `GET` | `/history/{check_id}` | Detail satu riwayat pengecekan | ✅ |
-| `GET` | `/history/{check_id}/image` | Ambil gambar pamflet dari riwayat | ✅ |
-| `POST` | `/history/{check_id}/share` | Share hasil ke community | ✅ |
-| `DELETE` | `/history/{check_id}/share` | Unshare dari community | ✅ |
-
-### Community (`/api/v1/community`)
-
-| Method | Endpoint | Deskripsi | Auth |
-|---|---|---|---|
-| `GET` | `/` | Community feed (paginated, filterable) | ❌ |
-| `GET` | `/{report_id}` | Detail satu report di community | ❌ |
-
-### Profile (`/api/v1/profile`)
-
-| Method | Endpoint | Deskripsi | Auth |
-|---|---|---|---|
-| `GET` | `/profile` | Lihat data profile user | ✅ |
-| `PUT` | `/profile` | Edit nama lengkap | ✅ |
-| `POST` | `/profile/image` | Upload atau ganti gambar profile | ✅ |
-| `GET` | `/profile/image` | Lihat gambar profile | ✅ |
-| `DELETE` | `/profile` | Hapus akun dan semua data terkait | ✅ |
-
-> Endpoint bertanda ✅ memerlukan header `Authorization: Bearer <token>`.
-
----
-
 ## Setup (Local Development)
 
-###1. Clone & Setup Virtual Environment
+### 1. Clone & Setup Virtual Environment
 ```bash
 git clone https://github.com/Techstack62/CekLoker-BackEnd.git
 cd CekLoker-BackEnd
@@ -307,6 +113,32 @@ uvicorn app.main:app --reload
 
 Server berjalan di `http://localhost:8000`.
 
+## Menjalankan dengan Docker
+
+Proyek ini juga dapat dijalankan menggunakan Docker untuk memudahkan deployment dan pengembangan.
+
+### Prasyarat
+- Docker dan Docker Compose terinstal di sistem Anda
+
+### Langkah-langkah
+
+1. **Konfigurasi Environment Variables**
+   Salin `.env.example` menjadi `.env` dan sesuaikan nilainya:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **Bangun dan Jalankan dengan Docker Compose**
+   ```bash
+   docker-compose up --build
+   ```
+
+3. **Akses Aplikasi**
+   Setelah container berjalan, aplikasi dapat diakses di:
+   - **API**: `http://localhost:8000`
+   - **Swagger UI**: `http://localhost:8000/docs`
+   - **Database**: `localhost:5432` (PostgreSQL)
+
 ---
 
 ## Dokumentasi API
@@ -315,73 +147,10 @@ Setelah server berjalan, akses dokumentasi interaktif di:
 - **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
 - **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
 
-### Dokumentasi Status Code di Swagger
-
-Setiap endpoint memiliki **dokumentasi status code lengkap** di Swagger UI, mencakup:
-- 200/201 — Success response
-- 400 — Bad Request
-- 401 — Unauthorized
-- 403 — Forbidden
-- 404 — Not Found
-- 409 — Conflict
-- 413 — Payload Too Large
-- 415 — Unsupported Media Type
-- 422 — Validation Error
-- 429 — Rate Limit Exceeded
-- 500 — Internal Server Error
-
-Dokumentasi ini menggunakan centralized response schemas di [`app/schemas/responses.py`](app/schemas/responses.py) dan helper functions di [`app/api/v1/responses.py`](app/api/v1/responses.py) untuk konsistensi dan kemudahan maintenance.
-
 ---
 
-## Catatan Pengembangan
+## Perubahan Terbaru
 
-### Keamanan
-
-- **Validasi File Upload**:
-  - Magic bytes validation (prevents file spoofing)
-  - Chunked file reading dengan size limit (prevents DoS attacks)
-  - Content-type validation
-- **Rate Limiting**: 10 upload per menit per IP pada endpoint upload
-- **Proteksi Endpoint**: Semua endpoint memerlukan autentikasi JWT
-- **Authorization**: User hanya bisa mengakses dan memodifikasi data miliknya sendiri
-- **Privacy di Community**: Data sensitif (email, phone) di-mask di community feed
-- **Cleanup Otomatis**: Gambar lama secara otomatis dihapus saat upload baru
-- **Cascade Delete**: Saat akun dihapus, semua data terkait ikut dihapus
-- **Logging**: Security events di-log untuk monitoring
-- **Consistent Error Handling**: Semua endpoint menggunakan standardized error format
-
-### Privacy di Community Feed
-
-Data yang dishare ke community sudah di-mask untuk melindungi privasi:
-- **Email**: `us***@domain.com` (hanya 2 karakter pertama visible)
-- **Phone**: `***1234` (hanya 4 karakter terakhir visible)
-
-User bisa memilih untuk share secara anonymous atau dengan nama.
-
-### Mock AI Model
-
-Analisis scam saat ini menggunakan **mock implementation** berbasis keyword matching. Modul ini dirancang secara modular di [`app/services/scam_analysis_service.py`](app/services/scam_analysis_service.py) — cukup ganti body fungsi `analyze_scam()` ketika model AI yang sesungguhnya sudah siap, tanpa perlu mengubah kode lain.
-
-### Penyimpanan Gambar
-
-Gambar yang diupload disimpan secara lokal di folder `uploads/` dengan nama file UUID:
-
-- **Gambar Pamflet Loker**: `uploads/loker/`
-- **Gambar Profile**: `uploads/profile/`
-
-File upload asli tidak ter-push ke GitHub (`.gitignore`), tetapi folder tetap dipertahankan dengan `.gitkeep`.
-
-Untuk menampilkan gambar, gunakan endpoint aman yang telah disediakan:
-
-```http
-# Gambar Pamflet Loker
-GET /api/v1/jobs/history/{check_id}/image
-Authorization: Bearer <token>
-
-# Gambar Profile
-GET /api/v1/profile/image
-Authorization: Bearer <token>
-```
-
-Endpoint tersebut memastikan hanya pemilik yang dapat mengakses gambar. Untuk production, disarankan menggunakan object storage seperti AWS S3, Google Cloud Storage, atau Supabase Storage.
+1. Memperbaiki error "numpy.core.multiarray failed to import" dengan memperbarui versi numpy di requirements.txt
+2. Memperbaiki error "module 'PIL.Image' has no attribute 'ANTIALIAS'" dengan menurunkan versi Pillow ke 9.x.x
+3. Memperbaiki error "LokerCheck() got multiple values for keyword argument 'raw_ocr_text'" dengan menghapus key "raw_ocr_text" dari dictionary hasil parsing OCR

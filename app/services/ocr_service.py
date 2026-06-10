@@ -96,5 +96,4 @@ def parse_ocr_text(raw_text: str) -> dict:
         "phone_number": phone,
         "description": description,
         "salary": salary,
-        "raw_ocr_text": raw_text,
     }

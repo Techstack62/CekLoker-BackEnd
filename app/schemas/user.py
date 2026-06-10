@@ -17,8 +17,18 @@ class UserCreate(UserBase):
 
 # Properties to receive via API on login
 class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
+    email: EmailStr = Field(
+        ...,
+        title="Email",
+        description="Alamat email pengguna",
+        examples=["user@example.com"]
+    )
+    password: str = Field(
+        ...,
+        title="Password",
+        description="Kata sandi akun",
+        examples=["password123"]
+    )
 
 
 # Properties to receive via API on update

@@ -1,7 +1,7 @@
 """Authentication endpoints with comprehensive error handling."""
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Form
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from passlib.context import CryptContext
@@ -110,6 +110,57 @@ async def register(
         await db.rollback()
         logger.error(f"Registration failed: {exc}", exc_info=True)
         raise InternalServerException("Gagal membuat akun. Silakan coba lagi.")
+
+
+@router.post(
+    "/token",
+    response_model=Token,
+    summary="OAuth2 Token untuk Swagger UI Authorize",
+    tags=["auth"],
+)
+async def oauth2_login(
+    username: str = Form(...),
+    password: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    OAuth2 password flow untuk Swagger UI Authorize.
+    """
+    # Find user by email (username in OAuth2 flow)
+    result = await db.execute(
+        select(User).where(User.email == username)
+    )
+    user = result.scalar_one_or_none()
+    
+    # Security: Use same error message for both email not found and wrong password
+    if user is None or not verify_password(password, user.hashed_password):
+        logger.warning(f"OAuth2 login failed for email: {username}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Email atau password salah.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Check if account is active
+    if not user.is_active:
+        logger.warning(f"OAuth2 login failed: account inactive for user {user.id}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Akun tidak aktif.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Create access token
+    try:
+        access_token = create_access_token(subject=str(user.id))
+        logger.info(f"OAuth2 token created for user: {user.email}")
+        return Token(access_token=access_token, token_type="bearer")
+    except Exception as exc:
+        logger.error(f"OAuth2 token creation failed: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Gagal membuat token.",
+        )
 
 
 @router.post(
