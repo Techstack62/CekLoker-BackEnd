@@ -13,7 +13,8 @@ from app.core.exceptions import (
     InternalServerException,
 )
 from app.models.user import User
-from app.schemas.user import UserCreate, UserLogin, Token, UserResponse
+from app.schemas.user import UserCreate, UserLogin, UserResponse
+from app.schemas.token import Token
 from app.core.security import create_access_token
 
 # Configure logging

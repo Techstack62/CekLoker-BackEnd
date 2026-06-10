@@ -16,6 +16,8 @@ venv.bak/
 .ruff_cache/
 .coverage
 htmlcov/
+*.db
+coverage.xml
 
 # OS files
 .DS_Store
@@ -28,3 +30,9 @@ uploads/loker/*
 # User profile images
 uploads/profile/*
 !uploads/profile/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

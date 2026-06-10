@@ -15,6 +15,12 @@ class UserCreate(UserBase):
     password: str = Field(..., min_length=8)
 
 
+# Properties to receive via API on login
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+
 # Properties to receive via API on update
 class UserUpdate(BaseModel):
     full_name: Optional[str] = Field(None, min_length=1, max_length=100)
@@ -24,6 +30,7 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     id: int
     profile_image: Optional[str] = None
+    username: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -32,6 +39,7 @@ class UserResponse(UserBase):
 class ProfileResponse(BaseModel):
     id: int
     email: EmailStr
+    username: Optional[str] = None
     full_name: Optional[str] = None
     profile_image: Optional[str] = None
     is_active: bool
