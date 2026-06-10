@@ -16,7 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, get_db
 from app.models.loker_check import LokerCheck
 from app.models.user import User
-from app.schemas.loker import HistoryListResponse, LokerCheckResponse, LokerCheckSummary
+from app.schemas.loker import (
+    OCRResultResponse,
+    OCRData,
+    OCRReviewRequest,
+    LokerCheckResponse,
+    LokerCheckSummary,
+    HistoryListResponse,
+    DraftListResponse,
+)
 from app.services import ocr_service, scam_analysis_service
 
 # Configure logging
@@ -39,6 +47,10 @@ IMAGE_FORMAT_EXTENSIONS = {
 MAX_FILE_SIZE_MB = 10
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
+# Upload directory for job images
+UPLOAD_DIR = Path("uploads/loker")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
 # Magic bytes signatures for image validation (High Priority security fix)
 MAGIC_BYTES = {
     b"\xff\xd8\xff": "jpeg",  # JPEG signature
@@ -50,8 +62,6 @@ def validate_magic_bytes(image_bytes: bytes) -> str | None:
     """
     Validate image based on magic bytes (file signature).
     Returns the image type if valid, None otherwise.
-    
-    This is a HIGH PRIORITY security fix to prevent spoofed content-type attacks.
     """
     for signature, img_type in MAGIC_BYTES.items():
         if image_bytes.startswith(signature):
@@ -64,7 +74,6 @@ def validate_image_and_get_extension(image_bytes: bytes) -> str:
     Validate uploaded bytes as a real image and return a safe extension.
     Performs both magic bytes validation and PIL verification.
     """
-    # First, validate magic bytes (High Priority security fix)
     magic_type = validate_magic_bytes(image_bytes)
     if magic_type is None:
         logger.warning("Upload rejected: invalid magic bytes (possible file spoofing attempt)")
@@ -73,7 +82,6 @@ def validate_image_and_get_extension(image_bytes: bytes) -> str:
             detail="File bukan format gambar yang valid.",
         )
 
-    # Then validate with PIL to ensure it's a valid, readable image
     try:
         with Image.open(io.BytesIO(image_bytes)) as image:
             image.verify()
@@ -100,21 +108,18 @@ async def read_file_with_size_limit(file: UploadFile, max_size: int) -> bytes:
     """
     Read file in chunks and validate size BEFORE loading entire file into memory.
     This is a HIGH PRIORITY security fix to prevent DoS attacks.
-    
-    Returns the file bytes if within size limit, raises HTTPException otherwise.
     """
     chunks = []
     total_size = 0
     chunk_size = 1024 * 1024  # 1MB chunks
-    
+
     while True:
         chunk = await file.read(chunk_size)
         if not chunk:
             break
-        
+
         total_size += len(chunk)
-        
-        # Check size limit BEFORE reading next chunk (DoS prevention)
+
         if total_size > max_size:
             logger.warning(
                 f"Upload rejected: file size {total_size} bytes exceeds limit {max_size} bytes"
@@ -123,52 +128,44 @@ async def read_file_with_size_limit(file: UploadFile, max_size: int) -> bytes:
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=f"Ukuran file melebihi batas {MAX_FILE_SIZE_MB} MB.",
             )
-        
+
         chunks.append(chunk)
-    
+
     return b"".join(chunks)
 
 
 @router.post(
-    "/check",
-    response_model=LokerCheckResponse,
+    "/ocr",
+    response_model=OCRResultResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Cek Loker dari Gambar Pamflet",
+    summary="Upload Gambar → OCR → Preview Hasil untuk Review",
+    tags=["jobs"],
+    deprecated=False,
 )
-@limiter.limit("10/minute")  # Rate limiting: 10 uploads per minute per IP
-async def check_loker(
+@limiter.limit("10/minute")
+async def upload_for_ocr(
     request: Request,
     file: UploadFile = File(..., description="Gambar pamflet loker (PNG/JPG, maks 10 MB)"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Upload gambar pamflet loker untuk dianalisis.
-
-    - Validasi tipe & ukuran file (size check BEFORE reading to memory - DoS prevention).
-    - Validasi magic bytes (file signature validation).
-    - Simpan gambar ke folder `uploads/loker/`.
-    - Melakukan OCR untuk mengekstrak informasi lowongan.
-    - Menganalisis potensi scam dari data yang diekstrak.
-    - Menyimpan dan mengembalikan hasil analisis.
+    Stage 1: Upload gambar untuk OCR dan review hasil.
     
-    Security improvements implemented:
-    - File size validation BEFORE reading to memory (prevents DoS)
-    - Magic bytes validation (prevents content-type spoofing)
-    - Rate limiting (10 uploads per minute per IP)
-    - Logging for security events
+    - Validasi tipe & ukuran file (DoS prevention)
+    - Validasi magic bytes (file spoofing prevention)
+    - Simpan gambar ke folder uploads/loker/
+    - Jalankan OCR untuk ekstrak teks
+    - Simpan hasil sebagai draft (belum dianalisis)
+    - Return hasil OCR untuk user review
     """
-    # --- Validasi tipe file (initial check, not final) ---
     if file.content_type not in ALLOWED_CONTENT_TYPES:
-        logger.warning(
-            f"Upload rejected: invalid content-type '{file.content_type}' from user {current_user.id}"
-        )
+        logger.warning(f"Upload rejected: invalid content-type '{file.content_type}' from user {current_user.id}")
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="Format file tidak didukung. Gunakan PNG atau JPG.",
         )
 
-    # --- Read file with size validation BEFORE loading to memory (DoS prevention) ---
     try:
         image_bytes = await read_file_with_size_limit(file, MAX_FILE_SIZE_BYTES)
     except HTTPException:
@@ -180,10 +177,8 @@ async def check_loker(
             detail="Gagal membaca file upload.",
         )
 
-    # --- Validasi magic bytes (High Priority security fix) ---
     ext = validate_image_and_get_extension(image_bytes)
 
-    # --- Simpan gambar ke disk ---
     image_filename = f"{uuid.uuid4().hex}{ext}"
     save_path = UPLOAD_DIR / image_filename
 
@@ -193,51 +188,412 @@ async def check_loker(
     logger.info(f"Image saved: {image_filename} (user: {current_user.id}, size: {len(image_bytes)} bytes)")
 
     try:
-        # --- OCR (dijalankan di thread pool agar tidak memblokir event loop) ---
         raw_text = await asyncio.to_thread(ocr_service.extract_text_from_image, image_bytes)
-
         parsed = ocr_service.parse_ocr_text(raw_text)
 
-        # --- Scam Analysis (mock) ---
-        analysis = await asyncio.to_thread(scam_analysis_service.analyze_scam, parsed)
-
-        # --- Simpan hasil ke database ---
         loker_check = LokerCheck(
             user_id=current_user.id,
-            image_filename=image_filename,   # hanya nama file, bukan full path
+            image_filename=image_filename,
+            raw_ocr_text=raw_text,
+            ocr_data=parsed,
+            is_draft=True,
             **parsed,
-            scam_percentage=analysis.scam_percentage,
-            scam_category=analysis.scam_category,
-            scam_reason=analysis.scam_reason,
         )
         db.add(loker_check)
         await db.commit()
         await db.refresh(loker_check)
-        
-        logger.info(f"Loker check completed: id={loker_check.id}, user={current_user.id}")
-    except HTTPException:
-        raise
+
+        logger.info(f"OCR draft created: id={loker_check.id}, user={current_user.id}")
+
+        return OCRResultResponse(
+            id=loker_check.id,
+            image_filename=loker_check.image_filename,
+            raw_text=raw_text,
+            ocr_data=OCRData(**parsed),
+            is_draft=True,
+            created_at=loker_check.created_at,
+        )
     except Exception as exc:
         await db.rollback()
-        # Clean up uploaded file on error
         save_path.unlink(missing_ok=True)
-        logger.error(f"Error processing loker check: {exc}", exc_info=True)
+        logger.error(f"Error processing OCR: {exc}", exc_info=True)
 
         if isinstance(exc, HTTPException):
             raise exc
 
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Gagal memproses gambar atau menyimpan hasil analisis. Detail: {exc}",
+            detail=f"Gagal memproses gambar. Detail: {exc}",
         )
 
-    return loker_check
+
+@router.get(
+    "/drafts",
+    response_model=DraftListResponse,
+    summary="List Semua Draft User",
+    tags=["jobs"],
+)
+async def get_drafts(
+    page: int = Query(default=1, ge=1, description="Nomor halaman"),
+    size: int = Query(default=10, ge=1, le=100, description="Jumlah item per halaman"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Mengembalikan semua draft (belum di-submit) milik user yang sedang login (paginated).
+    """
+    offset = (page - 1) * size
+
+    count_result = await db.execute(
+        select(func.count()).where(
+            LokerCheck.user_id == current_user.id,
+            LokerCheck.is_draft == True
+        )
+    )
+    total = count_result.scalar_one()
+
+    result = await db.execute(
+        select(LokerCheck)
+        .where(
+            LokerCheck.user_id == current_user.id,
+            LokerCheck.is_draft == True
+        )
+        .order_by(LokerCheck.created_at.desc())
+        .offset(offset)
+        .limit(size)
+    )
+    drafts = result.scalars().all()
+
+    return DraftListResponse(
+        total=total,
+        page=page,
+        size=size,
+        results=[
+            OCRResultResponse(
+                id=d.id,
+                image_filename=d.image_filename,
+                raw_text=d.raw_ocr_text or "",
+                ocr_data=OCRData(**d.ocr_data) if d.ocr_data else OCRData(),
+                is_draft=d.is_draft,
+                created_at=d.created_at,
+            )
+            for d in drafts
+        ],
+    )
+
+
+@router.get(
+    "/drafts/{draft_id}",
+    response_model=OCRResultResponse,
+    summary="Detail Satu Draft",
+    tags=["jobs"],
+)
+async def get_draft_detail(
+    draft_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Mengembalikan detail lengkap satu draft berdasarkan ID.
+    Hanya bisa diakses oleh pemilik draft tersebut.
+    """
+    result = await db.execute(
+        select(LokerCheck).where(LokerCheck.id == draft_id)
+    )
+    draft = result.scalar_one_or_none()
+
+    if draft is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Draft tidak ditemukan.",
+        )
+
+    if draft.user_id != current_user.id:
+        logger.warning(f"Unauthorized draft access: user {current_user.id} tried to access draft_id {draft_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Anda tidak memiliki akses ke draft ini.",
+        )
+
+    if not draft.is_draft:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Draft sudah di-submit. Gunakan endpoint history.",
+        )
+
+    return OCRResultResponse(
+        id=draft.id,
+        image_filename=draft.image_filename,
+        raw_text=draft.raw_ocr_text or "",
+        ocr_data=OCRData(**draft.ocr_data) if draft.ocr_data else OCRData(),
+        is_draft=draft.is_draft,
+        created_at=draft.created_at,
+    )
+
+
+@router.put(
+    "/drafts/{draft_id}",
+    response_model=OCRResultResponse,
+    summary="Update/Edit Hasil OCR Draft",
+    tags=["jobs"],
+)
+async def update_draft(
+    draft_id: int,
+    review: OCRReviewRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Mengupdate data OCR draft. User bisa mengoreksi hasil OCR yang salah.
+    Draft yang sudah di-submit tidak bisa diedit.
+    """
+    result = await db.execute(
+        select(LokerCheck).where(LokerCheck.id == draft_id)
+    )
+    draft = result.scalar_one_or_none()
+
+    if draft is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Draft tidak ditemukan.",
+        )
+
+    if draft.user_id != current_user.id:
+        logger.warning(f"Unauthorized draft update: user {current_user.id} tried to update draft_id {draft_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Anda tidak memiliki akses ke draft ini.",
+        )
+
+    if not draft.is_draft:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Draft sudah di-submit dan tidak bisa diedit.",
+        )
+
+    # Update ocr_data with user corrections
+    ocr_dict = draft.ocr_data or {}
+    update_data = review.ocr_data.model_dump(exclude_unset=True)
+    ocr_dict.update(update_data)
+
+    draft.ocr_data = ocr_dict
+
+    # Also update individual fields for backwards compatibility
+    if review.ocr_data.job_title is not None:
+        draft.job_title = review.ocr_data.job_title
+    if review.ocr_data.job_type is not None:
+        draft.job_type = review.ocr_data.job_type
+    if review.ocr_data.info_source is not None:
+        draft.info_source = review.ocr_data.info_source
+    if review.ocr_data.company_name is not None:
+        draft.company_name = review.ocr_data.company_name
+    if review.ocr_data.company_email is not None:
+        draft.company_email = review.ocr_data.company_email
+    if review.ocr_data.phone_number is not None:
+        draft.phone_number = review.ocr_data.phone_number
+    if review.ocr_data.salary is not None:
+        draft.salary = review.ocr_data.salary
+    if review.ocr_data.description is not None:
+        draft.description = review.ocr_data.description
+
+    # Reset analysis results - need to resubmit after edit
+    draft.scam_percentage = None
+    draft.scam_category = None
+    draft.scam_reason = None
+
+    await db.commit()
+    await db.refresh(draft)
+
+    logger.info(f"Draft updated: id={draft_id}, user={current_user.id}")
+
+    return OCRResultResponse(
+        id=draft.id,
+        image_filename=draft.image_filename,
+        raw_text=draft.raw_ocr_text or "",
+        ocr_data=OCRData(**draft.ocr_data) if draft.ocr_data else OCRData(),
+        is_draft=draft.is_draft,
+        created_at=draft.created_at,
+    )
+
+
+@router.post(
+    "/drafts/{draft_id}/submit",
+    response_model=LokerCheckResponse,
+    summary="Submit Draft untuk Analisis Scam",
+    tags=["jobs"],
+)
+async def submit_draft(
+    draft_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Submit draft untuk analisis scam.
+    
+    - Validasi draft exists & milik user
+    - Validasi bukan sudah di-submit
+    - Jalankan scam analysis
+    - Update is_draft=False, submitted_at=now()
+    - Return hasil lengkap
+    """
+    result = await db.execute(
+        select(LokerCheck).where(LokerCheck.id == draft_id)
+    )
+    draft = result.scalar_one_or_none()
+
+    if draft is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Draft tidak ditemukan.",
+        )
+
+    if draft.user_id != current_user.id:
+        logger.warning(f"Unauthorized draft submit: user {current_user.id} tried to submit draft_id {draft_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Anda tidak memiliki akses ke draft ini.",
+        )
+
+    if not draft.is_draft:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Draft sudah di-submit sebelumnya.",
+        )
+
+    if not draft.ocr_data:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Data OCR tidak valid.",
+        )
+
+    # Run scam analysis
+    try:
+        analysis = await asyncio.to_thread(scam_analysis_service.analyze_scam, draft.ocr_data)
+
+        draft.is_draft = False
+        draft.submitted_at = func.now()
+        draft.scam_percentage = analysis.scam_percentage
+        draft.scam_category = analysis.scam_category
+        draft.scam_reason = analysis.scam_reason
+
+        await db.commit()
+        await db.refresh(draft)
+
+        logger.info(f"Draft submitted and analyzed: id={draft_id}, user={current_user.id}")
+
+        return LokerCheckResponse.model_validate(draft)
+    except Exception as exc:
+        await db.rollback()
+        logger.error(f"Error analyzing draft: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Gagal menganalisis draft. Detail: {exc}",
+        )
+
+
+@router.delete(
+    "/drafts/{draft_id}",
+    summary="Hapus Draft",
+    tags=["jobs"],
+)
+async def delete_draft(
+    draft_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Menghapus draft yang tidak diperlukan.
+    Draft yang sudah di-submit tidak bisa dihapus.
+    """
+    result = await db.execute(
+        select(LokerCheck).where(LokerCheck.id == draft_id)
+    )
+    draft = result.scalar_one_or_none()
+
+    if draft is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Draft tidak ditemukan.",
+        )
+
+    if draft.user_id != current_user.id:
+        logger.warning(f"Unauthorized draft delete: user {current_user.id} tried to delete draft_id {draft_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Anda tidak memiliki akses ke draft ini.",
+        )
+
+    if not draft.is_draft:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Draft sudah di-submit dan tidak bisa dihapus.",
+        )
+
+    # Delete image file
+    if draft.image_filename:
+        image_path = UPLOAD_DIR / draft.image_filename
+        if image_path.exists():
+            image_path.unlink()
+
+    await db.delete(draft)
+    await db.commit()
+
+    logger.info(f"Draft deleted: id={draft_id}, user={current_user.id}")
+
+    return {"message": "Draft berhasil dihapus."}
+
+
+# Legacy endpoint - kept for backwards compatibility
+@router.post(
+    "/check",
+    response_model=LokerCheckResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="[Deprecated] Cek Loker dari Gambar Pamflet - Gunakan /ocr",
+    tags=["jobs"],
+    deprecated=True,
+)
+@limiter.limit("10/minute")
+async def check_loker_legacy(
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    ⚠️ DEPRECATED: Gunakan endpoint POST /api/v1/jobs/ocr untuk alur baru dengan review OCR.
+    
+    Upload gambar pamflet loker untuk dianalisis (satu tahap langsung).
+    """
+    # Reuse OCR endpoint logic but auto-submit
+    ocr_response = await upload_for_ocr(request, file, db, current_user)
+
+    # Auto-submit for backwards compatibility
+    result = await db.execute(
+        select(LokerCheck).where(LokerCheck.id == ocr_response.id)
+    )
+    draft = result.scalar_one()
+
+    analysis = await asyncio.to_thread(scam_analysis_service.analyze_scam, draft.ocr_data)
+
+    draft.is_draft = False
+    draft.submitted_at = func.now()
+    draft.scam_percentage = analysis.scam_percentage
+    draft.scam_category = analysis.scam_category
+    draft.scam_reason = analysis.scam_reason
+
+    await db.commit()
+    await db.refresh(draft)
+
+    logger.info(f"Legacy check completed: id={draft.id}, user={current_user.id}")
+
+    return LokerCheckResponse.model_validate(draft)
 
 
 @router.get(
     "/history",
     response_model=HistoryListResponse,
-    summary="Riwayat Pengecekan Loker Saya",
+    summary="Riwayat Pengecekan Loker Saya (Yang Sudah Di-submit)",
+    tags=["jobs"],
 )
 async def get_history(
     page: int = Query(default=1, ge=1, description="Nomor halaman"),
@@ -246,18 +602,25 @@ async def get_history(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Mengembalikan riwayat pengecekan loker milik user yang sedang login (paginated).
+    Mengembalikan riwayat pengecekan loker yang sudah di-submit (paginated).
+    Draft tidak termasuk dalam history.
     """
     offset = (page - 1) * size
 
     count_result = await db.execute(
-        select(func.count()).where(LokerCheck.user_id == current_user.id)
+        select(func.count()).where(
+            LokerCheck.user_id == current_user.id,
+            LokerCheck.is_draft == False
+        )
     )
     total = count_result.scalar_one()
 
     result = await db.execute(
         select(LokerCheck)
-        .where(LokerCheck.user_id == current_user.id)
+        .where(
+            LokerCheck.user_id == current_user.id,
+            LokerCheck.is_draft == False
+        )
         .order_by(LokerCheck.created_at.desc())
         .offset(offset)
         .limit(size)
@@ -276,6 +639,7 @@ async def get_history(
     "/history/{check_id}",
     response_model=LokerCheckResponse,
     summary="Detail Riwayat Pengecekan Loker",
+    tags=["jobs"],
 )
 async def get_history_detail(
     check_id: int,
@@ -306,13 +670,14 @@ async def get_history_detail(
             detail="Anda tidak memiliki akses ke riwayat ini.",
         )
 
-    return check
+    return LokerCheckResponse.model_validate(check)
 
 
 @router.get(
     "/history/{check_id}/image",
     response_class=FileResponse,
     summary="Gambar Pamflet dari Riwayat Pengecekan",
+    tags=["jobs"],
 )
 async def get_history_image(
     check_id: int,

@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, Integer, String, Float, Text,
-    DateTime, ForeignKey
+    DateTime, ForeignKey, Boolean, JSON
 )
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -13,7 +13,7 @@ class LokerCheck(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    # OCR extracted fields
+    # OCR extracted fields (kept for backwards compatibility, overridden by ocr_data on submit)
     job_title = Column(String, nullable=True)
     job_type = Column(String, nullable=True)
     info_source = Column(String, nullable=True)
@@ -24,6 +24,9 @@ class LokerCheck(Base):
     salary = Column(String, nullable=True)
     raw_ocr_text = Column(Text, nullable=True)
 
+    # New: Structured OCR data in JSON format
+    ocr_data = Column(JSON, nullable=True)
+
     # Scam analysis result
     scam_percentage = Column(Float, nullable=True)
     scam_category = Column(String, nullable=True)
@@ -31,6 +34,10 @@ class LokerCheck(Base):
 
     # Image reference
     image_filename = Column(String, nullable=True)
+
+    # Draft status for two-stage workflow
+    is_draft = Column(Boolean, default=True, nullable=False, index=True)
+    submitted_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
